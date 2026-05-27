@@ -172,24 +172,147 @@
             flex-wrap: wrap;
         }
 
-        select {
+        /* Select nativo (respaldo / accesibilidad) */
+        select.native-select-hidden {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            border: 0;
+        }
+
+        .custom-select {
             flex: 1;
             min-width: 160px;
-            padding: 0.85rem 1rem;
+            position: relative;
+        }
+
+        .custom-select-trigger {
+            width: 100%;
+            text-align: left;
+            padding: 0.85rem 2.5rem 0.85rem 1rem;
             border-radius: 10px;
             border: 1px solid var(--border);
-            background: rgba(0, 0, 0, 0.35);
+            background: #0d1224;
             color: var(--text);
             font-family: inherit;
             font-size: 0.9rem;
+            font-weight: 500;
             cursor: pointer;
             transition: border-color 0.2s, box-shadow 0.2s;
+            position: relative;
         }
 
-        select:hover, select:focus {
-            outline: none;
+        .custom-select-trigger::after {
+            content: "";
+            position: absolute;
+            right: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            border-left: 5px solid transparent;
+            border-right: 5px solid transparent;
+            border-top: 6px solid var(--gold);
+        }
+
+        .custom-select-trigger:hover,
+        .custom-select.open .custom-select-trigger {
             border-color: var(--gold);
             box-shadow: 0 0 0 3px rgba(245, 197, 24, 0.15);
+        }
+
+        .custom-select-trigger.placeholder {
+            color: var(--text-muted);
+        }
+
+        .custom-select-menu {
+            display: none;
+            position: absolute;
+            top: calc(100% + 6px);
+            left: 0;
+            right: 0;
+            z-index: 100;
+            background: #0d1224;
+            border: 1px solid rgba(245, 197, 24, 0.4);
+            border-radius: 12px;
+            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.65);
+            overflow: hidden;
+        }
+
+        .custom-select.open .custom-select-menu {
+            display: block;
+            animation: menuIn 0.15s ease;
+        }
+
+        @keyframes menuIn {
+            from { opacity: 0; transform: translateY(-6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .custom-select-search {
+            width: 100%;
+            padding: 0.65rem 0.85rem;
+            border: none;
+            border-bottom: 1px solid var(--border);
+            background: #080c18;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 0.85rem;
+        }
+
+        .custom-select-search:focus {
+            outline: none;
+            background: #0a1020;
+        }
+
+        .custom-select-search::placeholder {
+            color: var(--text-muted);
+        }
+
+        .custom-select-options {
+            list-style: none;
+            max-height: 240px;
+            overflow-y: auto;
+            padding: 0.35rem 0;
+        }
+
+        .custom-select-options::-webkit-scrollbar { width: 8px; }
+        .custom-select-options::-webkit-scrollbar-thumb {
+            background: var(--gold-dim);
+            border-radius: 4px;
+        }
+
+        .custom-select-option {
+            padding: 0.6rem 1rem;
+            font-size: 0.9rem;
+            color: #e8eeff;
+            cursor: pointer;
+            transition: background 0.12s, color 0.12s;
+        }
+
+        .custom-select-option:hover,
+        .custom-select-option.focused {
+            background: rgba(245, 197, 24, 0.18);
+            color: var(--gold);
+        }
+
+        .custom-select-option.selected {
+            background: rgba(0, 229, 255, 0.12);
+            color: var(--cyan);
+            font-weight: 600;
+        }
+
+        .custom-select-option.hidden {
+            display: none;
+        }
+
+        .custom-select-empty {
+            padding: 1rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
         }
 
         .btn-predict {
@@ -631,6 +754,114 @@
             "Third place": "Tercer puesto"
         };
 
+        function enhanceSelect(selectEl) {
+            if (selectEl.dataset.enhanced) return;
+            selectEl.dataset.enhanced = "1";
+
+            const wrap = document.createElement("div");
+            wrap.className = "custom-select";
+            selectEl.parentNode.insertBefore(wrap, selectEl);
+            wrap.appendChild(selectEl);
+            selectEl.classList.add("native-select-hidden");
+
+            const trigger = document.createElement("button");
+            trigger.type = "button";
+            trigger.className = "custom-select-trigger placeholder";
+            trigger.textContent = selectEl.options[0]?.textContent || "Seleccionar...";
+
+            const menu = document.createElement("div");
+            menu.className = "custom-select-menu";
+
+            const searchable = selectEl.options.length > 8;
+            let search = null;
+            if (searchable) {
+                search = document.createElement("input");
+                search.type = "text";
+                search.className = "custom-select-search";
+                search.placeholder = "Buscar equipo...";
+                menu.appendChild(search);
+            }
+
+            const list = document.createElement("ul");
+            list.className = "custom-select-options";
+            menu.appendChild(list);
+
+            wrap.appendChild(trigger);
+            wrap.appendChild(menu);
+
+            function syncTrigger() {
+                const opt = selectEl.options[selectEl.selectedIndex];
+                if (!opt || !opt.value) {
+                    trigger.textContent = selectEl.options[0]?.textContent || "Seleccionar...";
+                    trigger.classList.add("placeholder");
+                } else {
+                    trigger.textContent = opt.textContent;
+                    trigger.classList.remove("placeholder");
+                }
+            }
+
+            function buildOptions(filter = "") {
+                const q = filter.trim().toLowerCase();
+                list.innerHTML = "";
+                let visible = 0;
+                [...selectEl.options].forEach((opt, i) => {
+                    if (i === 0 && !opt.value) return;
+                    const label = opt.textContent;
+                    if (q && !label.toLowerCase().includes(q)) return;
+                    visible++;
+                    const li = document.createElement("li");
+                    li.className = "custom-select-option";
+                    if (opt.value === selectEl.value) li.classList.add("selected");
+                    li.textContent = label;
+                    li.dataset.value = opt.value;
+                    li.addEventListener("click", () => {
+                        selectEl.value = opt.value;
+                        syncTrigger();
+                        wrap.classList.remove("open");
+                        list.querySelectorAll(".custom-select-option").forEach(el => {
+                            el.classList.toggle("selected", el.dataset.value === selectEl.value);
+                        });
+                    });
+                    list.appendChild(li);
+                });
+                if (!visible) {
+                    const empty = document.createElement("li");
+                    empty.className = "custom-select-empty";
+                    empty.textContent = "Sin resultados";
+                    list.appendChild(empty);
+                }
+            }
+
+            trigger.addEventListener("click", (e) => {
+                e.stopPropagation();
+                document.querySelectorAll(".custom-select.open").forEach(el => {
+                    if (el !== wrap) el.classList.remove("open");
+                });
+                wrap.classList.toggle("open");
+                if (wrap.classList.contains("open")) {
+                    buildOptions(search?.value || "");
+                    if (search) {
+                        search.value = "";
+                        search.focus();
+                    }
+                }
+            });
+
+            if (search) {
+                search.addEventListener("input", () => buildOptions(search.value));
+                search.addEventListener("click", (e) => e.stopPropagation());
+            }
+
+            selectEl.addEventListener("change", syncTrigger);
+            wrap._rebuildOptions = () => buildOptions(search?.value || "");
+            buildOptions();
+            syncTrigger();
+        }
+
+        document.addEventListener("click", () => {
+            document.querySelectorAll(".custom-select.open").forEach(el => el.classList.remove("open"));
+        });
+
         function getHistory() {
             try {
                 return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
@@ -761,14 +992,20 @@
                 matches.forEach(m => { teams.add(m.home_team); teams.add(m.away_team); });
                 sorted = [...teams].sort();
             }
-            ["home", "away"].forEach(id => {
+            ["home", "away", "stage"].forEach(id => {
                 const sel = document.getElementById(id);
-                sorted.forEach(t => {
-                    const o = document.createElement("option");
-                    o.value = t;
-                    o.textContent = t;
-                    sel.appendChild(o);
-                });
+                if (id === "home" || id === "away") {
+                    while (sel.options.length > 1) sel.remove(1);
+                    sorted.forEach(t => {
+                        const o = document.createElement("option");
+                        o.value = t;
+                        o.textContent = t;
+                        sel.appendChild(o);
+                    });
+                }
+                const wrap = sel.closest(".custom-select");
+                if (wrap?._rebuildOptions) wrap._rebuildOptions();
+                else enhanceSelect(sel);
             });
         }
 
