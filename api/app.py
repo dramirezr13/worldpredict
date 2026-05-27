@@ -6,6 +6,15 @@ from flask_cors import CORS
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 
+sys_path = os.path.join(os.path.dirname(__file__), "..", "data")
+if sys_path not in __import__("sys").path:
+    __import__("sys").path.insert(0, os.path.abspath(sys_path))
+
+try:
+    from worldcup_2026 import FIFA_DISPLAY_NAMES
+except ImportError:
+    FIFA_DISPLAY_NAMES = {}
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -101,6 +110,50 @@ def team_history(team):
         """), {"team": team})
         matches = [dict(row._mapping) for row in result]
     return jsonify(matches)
+
+@app.route("/worldcup/2026/teams")
+def worldcup_2026_teams():
+    with engine.connect() as conn:
+        rows = conn.execute(text("""
+            SELECT team_name, team_code, group_name, confederation, is_host
+            FROM worldcup_qualified_teams
+            WHERE tournament_id = 'WC-2026'
+            ORDER BY group_name, team_name
+        """)).fetchall()
+
+    if not rows:
+        return jsonify({
+            "tournament_id": "WC-2026",
+            "tournament_name": "2026 FIFA Men's World Cup",
+            "count": 0,
+            "teams": [],
+            "groups": {},
+            "message": "Ejecuta python data/load_worldcup.py para cargar los equipos.",
+        })
+
+    teams = []
+    groups = {}
+    for r in rows:
+        display = FIFA_DISPLAY_NAMES.get(r.team_name, r.team_name)
+        entry = {
+            "team_name": r.team_name,
+            "display_name": display,
+            "team_code": r.team_code,
+            "group": r.group_name,
+            "confederation": r.confederation,
+            "is_host": bool(r.is_host),
+        }
+        teams.append(entry)
+        groups.setdefault(r.group_name, []).append(display)
+
+    return jsonify({
+        "tournament_id": "WC-2026",
+        "tournament_name": "2026 FIFA Men's World Cup",
+        "count": len(teams),
+        "teams": teams,
+        "groups": groups,
+    })
+
 
 @app.route("/stats")
 def get_stats():

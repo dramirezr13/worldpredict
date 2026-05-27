@@ -1,0 +1,9 @@
+^.*\.Rproj$
+^\.Rproj\.user$
+^data-csv/
+^codebook/
+^data-raw/
+^data-csv/
+^data-json/
+^data-sqlite/
+^visualizations

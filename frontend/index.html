@@ -52,6 +52,13 @@
         .top-team-rank { font-size: 18px; font-weight: bold; color: #42a5f5; width: 30px; }
         .top-team-name { flex: 1; font-size: 14px; }
         .top-team-wins { font-weight: bold; color: #90caf9; }
+        .wc2026-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+        .wc2026-group { background: #0a0e1a; border-radius: 10px; padding: 14px; border: 1px solid #1e2a45; }
+        .wc2026-group h3 { color: #42a5f5; font-size: 14px; margin-bottom: 10px; }
+        .wc2026-team { font-size: 13px; padding: 4px 0; display: flex; justify-content: space-between; gap: 8px; }
+        .wc2026-team .code { color: #546e8a; font-size: 11px; }
+        .wc2026-team.host { color: #ffd54f; }
+        .wc2026-badge { display: inline-block; background: #1565c0; color: white; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 8px; }
     </style>
 </head>
 <body>
@@ -63,6 +70,14 @@
     </header>
 
     <div class="container">
+
+        <!-- Equipos Mundial 2026 -->
+        <div class="card">
+            <h2>🌍 Equipos del Mundial 2026 <span class="wc2026-badge" id="wc2026Count">48</span></h2>
+            <div class="wc2026-grid" id="wc2026Teams">
+                <div class="loading">Cargando equipos...</div>
+            </div>
+        </div>
 
         <!-- Estadísticas generales -->
         <div class="card">
@@ -170,15 +185,48 @@
                 </div>`).join("");
         }
 
+        async function loadWorldCup2026Teams() {
+            const res = await fetch(`${API}/worldcup/2026/teams`);
+            const data = await res.json();
+            document.getElementById("wc2026Count").textContent = data.count || 0;
+
+            if (!data.groups || Object.keys(data.groups).length === 0) {
+                document.getElementById("wc2026Teams").innerHTML =
+                    `<div class="loading">${data.message || "Sin datos. Ejecuta data/load_worldcup.py"}</div>`;
+                return [];
+            }
+
+            const groupOrder = Object.keys(data.groups).sort();
+            document.getElementById("wc2026Teams").innerHTML = groupOrder.map(g => `
+                <div class="wc2026-group">
+                    <h3>Grupo ${g}</h3>
+                    ${data.teams.filter(t => t.group === g).map(t => `
+                        <div class="wc2026-team${t.is_host ? " host" : ""}">
+                            <span>${t.display_name}${t.is_host ? " 🏠" : ""}</span>
+                            <span class="code">${t.team_code}</span>
+                        </div>`).join("")}
+                </div>`).join("");
+
+            return data.teams.map(t => t.team_name).sort();
+        }
+
         async function loadTeams() {
-            const res = await fetch(`${API}/matches`);
-            const matches = await res.json();
-            const teams = new Set();
-            matches.forEach(m => { teams.add(m.home_team); teams.add(m.away_team); });
-            const sorted = [...teams].sort();
+            let sorted = await loadWorldCup2026Teams();
+            if (!sorted.length) {
+                const res = await fetch(`${API}/matches`);
+                const matches = await res.json();
+                const teams = new Set();
+                matches.forEach(m => { teams.add(m.home_team); teams.add(m.away_team); });
+                sorted = [...teams].sort();
+            }
             ["home", "away"].forEach(id => {
                 const sel = document.getElementById(id);
-                sorted.forEach(t => { const o = document.createElement("option"); o.value = t; o.textContent = t; sel.appendChild(o); });
+                sorted.forEach(t => {
+                    const o = document.createElement("option");
+                    o.value = t;
+                    o.textContent = t;
+                    sel.appendChild(o);
+                });
             });
         }
 
