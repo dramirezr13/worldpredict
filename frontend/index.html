@@ -3,186 +3,728 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WorldPredict 2026</title>
+    <title>WorldPredict 2026 | FIFA World Cup</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        :root {
+            --bg-deep: #050810;
+            --bg-card: rgba(12, 18, 35, 0.85);
+            --gold: #f5c518;
+            --gold-dim: #c9a012;
+            --green: #00c853;
+            --magenta: #e040fb;
+            --cyan: #00e5ff;
+            --red-host: #e53935;
+            --text: #f0f4ff;
+            --text-muted: #8b9cb8;
+            --border: rgba(245, 197, 24, 0.15);
+            --glass: rgba(255, 255, 255, 0.04);
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: Arial, sans-serif; background: #0a0e1a; color: white; }
-        header { background: linear-gradient(135deg, #1a237e, #283593); padding: 20px 40px; display: flex; align-items: center; gap: 15px; }
-        header h1 { font-size: 28px; }
-        header span { font-size: 14px; color: #90caf9; }
-        .container { max-width: 900px; margin: 40px auto; padding: 0 20px; }
-        .card { background: #151929; border-radius: 12px; padding: 30px; margin-bottom: 30px; border: 1px solid #1e2a45; }
-        h2 { color: #90caf9; margin-bottom: 20px; font-size: 18px; }
-        .form-row { display: flex; gap: 15px; flex-wrap: wrap; }
-        select, button { padding: 12px 16px; border-radius: 8px; border: 1px solid #1e2a45; font-size: 14px; }
-        select { background: #0a0e1a; color: white; flex: 1; min-width: 180px; }
-        button { background: linear-gradient(135deg, #1565c0, #1976d2); color: white; cursor: pointer; border: none; font-weight: bold; padding: 12px 30px; }
-        button:hover { background: linear-gradient(135deg, #1976d2, #2196f3); }
-        .result { margin-top: 25px; display: none; }
-        .teams { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-        .team { text-align: center; }
-        .team-name { font-size: 20px; font-weight: bold; }
-        .vs { font-size: 24px; color: #90caf9; font-weight: bold; }
-        .bars { display: flex; flex-direction: column; gap: 10px; }
-        .bar-row { display: flex; align-items: center; gap: 10px; }
-        .bar-label { width: 80px; font-size: 13px; color: #90caf9; }
-        .bar-bg { flex: 1; background: #1e2a45; border-radius: 20px; height: 28px; overflow: hidden; }
-        .bar-fill { height: 100%; border-radius: 20px; display: flex; align-items: center; padding-left: 12px; font-size: 13px; font-weight: bold; transition: width 0.8s ease; }
+
+        body {
+            font-family: "Outfit", sans-serif;
+            background: var(--bg-deep);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(ellipse 80% 50% at 20% -10%, rgba(0, 200, 83, 0.12), transparent),
+                radial-gradient(ellipse 60% 40% at 90% 10%, rgba(224, 64, 251, 0.1), transparent),
+                radial-gradient(ellipse 50% 30% at 50% 100%, rgba(245, 197, 24, 0.08), transparent),
+                linear-gradient(180deg, #0a0f1e 0%, #050810 100%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        body::after {
+            content: "";
+            position: fixed;
+            inset: 0;
+            background-image: repeating-linear-gradient(
+                90deg,
+                transparent,
+                transparent 80px,
+                rgba(255, 255, 255, 0.015) 80px,
+                rgba(255, 255, 255, 0.015) 81px
+            );
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .page { position: relative; z-index: 1; }
+
+        /* Header */
+        .hero {
+            padding: 2rem 1.5rem 3rem;
+            text-align: center;
+            border-bottom: 1px solid var(--border);
+            background: linear-gradient(180deg, rgba(245, 197, 24, 0.06) 0%, transparent 100%);
+        }
+
+        .hero-badges {
+            display: flex;
+            justify-content: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin-bottom: 1rem;
+        }
+
+        .host-pill {
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            padding: 0.35rem 0.75rem;
+            border-radius: 999px;
+            border: 1px solid;
+        }
+
+        .host-pill.ca { color: #ff5252; border-color: rgba(255, 82, 82, 0.4); background: rgba(255, 82, 82, 0.08); }
+        .host-pill.mx { color: var(--green); border-color: rgba(0, 200, 83, 0.4); background: rgba(0, 200, 83, 0.08); }
+        .host-pill.us { color: #42a5f5; border-color: rgba(66, 165, 245, 0.4); background: rgba(66, 165, 245, 0.08); }
+
+        .hero h1 {
+            font-family: "Bebas Neue", sans-serif;
+            font-size: clamp(2.8rem, 10vw, 4.5rem);
+            letter-spacing: 0.06em;
+            line-height: 1;
+            background: linear-gradient(135deg, var(--gold) 0%, #fff 40%, var(--cyan) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero-sub {
+            margin-top: 0.5rem;
+            color: var(--text-muted);
+            font-size: 1rem;
+            font-weight: 300;
+        }
+
+        .hero-year {
+            display: inline-block;
+            margin-top: 1rem;
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 1.5rem;
+            color: var(--gold);
+            letter-spacing: 0.2em;
+        }
+
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 2rem 1.25rem 4rem;
+        }
+
+        .card {
+            background: var(--bg-card);
+            backdrop-filter: blur(12px);
+            border-radius: 16px;
+            padding: 1.75rem;
+            margin-bottom: 1.5rem;
+            border: 1px solid var(--border);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .card.featured {
+            border-color: rgba(245, 197, 24, 0.35);
+            box-shadow: 0 0 40px rgba(245, 197, 24, 0.08);
+        }
+
+        .card-title {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            margin-bottom: 1.25rem;
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 1.35rem;
+            letter-spacing: 0.08em;
+            color: var(--gold);
+        }
+
+        .card-title .icon { font-size: 1.2rem; }
+
+        .badge {
+            font-family: "Outfit", sans-serif;
+            font-size: 0.7rem;
+            font-weight: 600;
+            background: linear-gradient(135deg, var(--gold), var(--gold-dim));
+            color: #0a0f1e;
+            padding: 0.2rem 0.55rem;
+            border-radius: 6px;
+            letter-spacing: 0.05em;
+        }
+
+        /* Forms */
+        .form-row {
+            display: flex;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+        }
+
+        select {
+            flex: 1;
+            min-width: 160px;
+            padding: 0.85rem 1rem;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: rgba(0, 0, 0, 0.35);
+            color: var(--text);
+            font-family: inherit;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        select:hover, select:focus {
+            outline: none;
+            border-color: var(--gold);
+            box-shadow: 0 0 0 3px rgba(245, 197, 24, 0.15);
+        }
+
+        .btn-predict {
+            padding: 0.85rem 2rem;
+            border: none;
+            border-radius: 10px;
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 1.1rem;
+            letter-spacing: 0.12em;
+            cursor: pointer;
+            background: linear-gradient(135deg, var(--gold) 0%, #ffab00 100%);
+            color: #0a0f1e;
+            transition: transform 0.15s, box-shadow 0.2s;
+            white-space: nowrap;
+        }
+
+        .btn-predict:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(245, 197, 24, 0.35);
+        }
+
+        .btn-predict:active { transform: translateY(0); }
+
+        .btn-ghost {
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: color 0.2s, border-color 0.2s;
+        }
+
+        .btn-ghost:hover {
+            color: var(--red-host);
+            border-color: rgba(229, 57, 53, 0.5);
+        }
+
+        /* Prediction result */
+        .result { margin-top: 1.5rem; display: none; animation: fadeIn 0.4s ease; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .matchup {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            padding: 1rem;
+            background: var(--glass);
+            border-radius: 12px;
+        }
+
+        .team-block { text-align: center; flex: 1; }
+        .team-block .name { font-weight: 700; font-size: 1.1rem; }
+        .team-block .role { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; margin-top: 0.25rem; }
+
+        .vs-badge {
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 1.8rem;
+            color: var(--gold);
+            text-shadow: 0 0 20px rgba(245, 197, 24, 0.4);
+        }
+
+        .bars { display: flex; flex-direction: column; gap: 0.65rem; }
+        .bar-row { display: flex; align-items: center; gap: 0.75rem; }
+        .bar-label { width: 72px; font-size: 0.8rem; color: var(--text-muted); font-weight: 500; }
+        .bar-bg {
+            flex: 1;
+            height: 32px;
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .bar-fill {
+            height: 100%;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            padding-left: 10px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            transition: width 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+            min-width: 2.5rem;
+        }
         .bar-home { background: linear-gradient(90deg, #1565c0, #42a5f5); }
-        .bar-draw { background: linear-gradient(90deg, #4a4a6a, #7e7eaa); }
-        .bar-away { background: linear-gradient(90deg, #b71c1c, #ef5350); }
-        .predicted { text-align: center; margin-top: 15px; font-size: 16px; }
-        .predicted span { background: #1565c0; padding: 6px 18px; border-radius: 20px; font-weight: bold; }
-        .matches-list { display: flex; flex-direction: column; gap: 10px; max-height: 400px; overflow-y: auto; }
-        .match-item { display: flex; justify-content: space-between; align-items: center; background: #0a0e1a; padding: 12px 16px; border-radius: 8px; border: 1px solid #1e2a45; font-size: 14px; }
-        .match-score { font-weight: bold; color: #90caf9; }
-        .match-info { font-size: 12px; color: #546e8a; }
-        .loading { text-align: center; color: #546e8a; padding: 20px; }
-        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 25px; }
-        .stat-box { background: #0a0e1a; border-radius: 10px; padding: 20px; text-align: center; border: 1px solid #1e2a45; }
-        .stat-number { font-size: 32px; font-weight: bold; color: #42a5f5; }
-        .stat-label { font-size: 12px; color: #546e8a; margin-top: 5px; }
-        .season-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 25px; }
-        .season-item { background: #0a0e1a; border-radius: 8px; padding: 15px; border: 1px solid #1e2a45; display: flex; justify-content: space-between; align-items: center; }
-        .season-year { font-weight: bold; color: #90caf9; font-size: 16px; }
-        .season-detail { text-align: right; font-size: 13px; color: #546e8a; }
-        .season-detail span { display: block; color: white; font-weight: bold; }
-        .top-teams { display: flex; flex-direction: column; gap: 8px; }
-        .top-team-item { display: flex; align-items: center; gap: 12px; background: #0a0e1a; padding: 12px 16px; border-radius: 8px; border: 1px solid #1e2a45; }
-        .top-team-rank { font-size: 18px; font-weight: bold; color: #42a5f5; width: 30px; }
-        .top-team-name { flex: 1; font-size: 14px; }
-        .top-team-wins { font-weight: bold; color: #90caf9; }
-        .wc2026-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
-        .wc2026-group { background: #0a0e1a; border-radius: 10px; padding: 14px; border: 1px solid #1e2a45; }
-        .wc2026-group h3 { color: #42a5f5; font-size: 14px; margin-bottom: 10px; }
-        .wc2026-team { font-size: 13px; padding: 4px 0; display: flex; justify-content: space-between; gap: 8px; }
-        .wc2026-team .code { color: #546e8a; font-size: 11px; }
-        .wc2026-team.host { color: #ffd54f; }
-        .wc2026-badge { display: inline-block; background: #1565c0; color: white; font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 8px; }
+        .bar-draw { background: linear-gradient(90deg, #5c6bc0, #9fa8da); }
+        .bar-away { background: linear-gradient(90deg, #c62828, #ef5350); }
+
+        .predicted-outcome {
+            text-align: center;
+            margin-top: 1.25rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .predicted-outcome span {
+            display: inline-block;
+            background: linear-gradient(135deg, rgba(245, 197, 24, 0.2), rgba(0, 229, 255, 0.1));
+            border: 1px solid var(--gold);
+            color: var(--gold);
+            padding: 0.5rem 1.25rem;
+            border-radius: 999px;
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+
+        /* Prediction history */
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        .history-count {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .history-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.65rem;
+            max-height: 420px;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+
+        .history-list::-webkit-scrollbar { width: 6px; }
+        .history-list::-webkit-scrollbar-thumb { background: var(--gold-dim); border-radius: 3px; }
+
+        .history-item {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 0.5rem 1rem;
+            align-items: center;
+            padding: 1rem 1.1rem;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 12px;
+            border-left: 3px solid var(--gold);
+            transition: background 0.2s;
+        }
+
+        .history-item:hover { background: rgba(245, 197, 24, 0.06); }
+
+        .history-match {
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+
+        .history-match .prob {
+            color: var(--cyan);
+            font-weight: 700;
+        }
+
+        .history-meta {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            grid-column: 1 / -1;
+        }
+
+        .history-result {
+            text-align: right;
+        }
+
+        .result-pill {
+            display: inline-block;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.35rem 0.7rem;
+            border-radius: 6px;
+            background: rgba(0, 200, 83, 0.15);
+            color: var(--green);
+            border: 1px solid rgba(0, 200, 83, 0.3);
+        }
+
+        .empty-history {
+            text-align: center;
+            padding: 2.5rem 1rem;
+            color: var(--text-muted);
+        }
+
+        .empty-history .big { font-size: 2.5rem; margin-bottom: 0.5rem; opacity: 0.5; }
+
+        /* Stats */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+        }
+
+        @media (max-width: 600px) {
+            .stats-grid { grid-template-columns: 1fr; }
+        }
+
+        .stat-box {
+            text-align: center;
+            padding: 1.25rem;
+            background: var(--glass);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .stat-number {
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 2.2rem;
+            color: var(--gold);
+            line-height: 1;
+        }
+
+        .stat-label { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.35rem; }
+
+        .top-teams, .season-grid { display: flex; flex-direction: column; gap: 0.5rem; }
+
+        .season-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.5rem;
+        }
+
+        @media (max-width: 500px) { .season-grid { grid-template-columns: 1fr; } }
+
+        .list-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: var(--glass);
+            border-radius: 10px;
+            font-size: 0.9rem;
+        }
+
+        .list-row strong { color: var(--gold); }
+
+        /* WC 2026 groups */
+        .wc2026-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 0.75rem;
+        }
+
+        .wc2026-group {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 12px;
+            padding: 1rem;
+            border: 1px solid var(--border);
+        }
+
+        .wc2026-group h3 {
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 1.1rem;
+            letter-spacing: 0.1em;
+            color: var(--cyan);
+            margin-bottom: 0.65rem;
+            padding-bottom: 0.35rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .wc2026-team {
+            font-size: 0.82rem;
+            padding: 0.3rem 0;
+            display: flex;
+            justify-content: space-between;
+            gap: 0.5rem;
+        }
+
+        .wc2026-team .code { color: var(--text-muted); font-size: 0.7rem; }
+        .wc2026-team.host { color: var(--gold); }
+
+        .loading {
+            text-align: center;
+            color: var(--text-muted);
+            padding: 1.5rem;
+        }
+
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            border-top: 1px solid var(--border);
+        }
     </style>
 </head>
 <body>
-    <header>
-        <div>
-            <h1>⚽ WorldPredict 2026</h1>
-            <span>Sistema de Predicción del Mundial de Fútbol</span>
-        </div>
-    </header>
-
-    <div class="container">
-
-        <!-- Equipos Mundial 2026 -->
-        <div class="card">
-            <h2>🌍 Equipos del Mundial 2026 <span class="wc2026-badge" id="wc2026Count">48</span></h2>
-            <div class="wc2026-grid" id="wc2026Teams">
-                <div class="loading">Cargando equipos...</div>
+    <div class="page">
+        <header class="hero">
+            <div class="hero-badges">
+                <span class="host-pill ca">Canadá</span>
+                <span class="host-pill mx">México</span>
+                <span class="host-pill us">Estados Unidos</span>
             </div>
-        </div>
+            <h1>WORLDPREDICT</h1>
+            <p class="hero-sub">Predicciones inteligentes para la Copa Mundial de la FIFA</p>
+            <span class="hero-year">2026</span>
+        </header>
 
-        <!-- Estadísticas generales -->
-        <div class="card">
-            <h2>📊 Estadísticas Históricas</h2>
-            <div class="stats-grid">
-                <div class="stat-box">
-                    <div class="stat-number" id="totalMatches">-</div>
-                    <div class="stat-label">Partidos Históricos</div>
+        <div class="container">
+
+            <!-- Predictor -->
+            <section class="card featured">
+                <h2 class="card-title"><span class="icon">⚽</span> Predecir partido</h2>
+                <div class="form-row">
+                    <select id="home">
+                        <option value="">Equipo local...</option>
+                    </select>
+                    <select id="away">
+                        <option value="">Equipo visitante...</option>
+                    </select>
+                    <select id="stage">
+                        <option value="Group Stage">Fase de grupos</option>
+                        <option value="Round of 16">Octavos de final</option>
+                        <option value="Quarter-finals">Cuartos de final</option>
+                        <option value="Semi-finals">Semifinal</option>
+                        <option value="Final">Final</option>
+                    </select>
+                    <button type="button" class="btn-predict" onclick="predict()">PREDECIR</button>
                 </div>
-                <div class="stat-box">
-                    <div class="stat-number" id="totalGoals">-</div>
-                    <div class="stat-label">Goles Totales</div>
+                <div class="result" id="result">
+                    <div class="matchup">
+                        <div class="team-block">
+                            <div class="name" id="homeName"></div>
+                            <div class="role">Local</div>
+                        </div>
+                        <div class="vs-badge">VS</div>
+                        <div class="team-block">
+                            <div class="name" id="awayName"></div>
+                            <div class="role">Visitante</div>
+                        </div>
+                    </div>
+                    <div class="bars">
+                        <div class="bar-row">
+                            <div class="bar-label">Local</div>
+                            <div class="bar-bg"><div class="bar-fill bar-home" id="barHome"></div></div>
+                        </div>
+                        <div class="bar-row">
+                            <div class="bar-label">Empate</div>
+                            <div class="bar-bg"><div class="bar-fill bar-draw" id="barDraw"></div></div>
+                        </div>
+                        <div class="bar-row">
+                            <div class="bar-label">Visitante</div>
+                            <div class="bar-bg"><div class="bar-fill bar-away" id="barAway"></div></div>
+                        </div>
+                    </div>
+                    <div class="predicted-outcome">
+                        Resultado: <span id="predicted"></span>
+                    </div>
                 </div>
-                <div class="stat-box">
-                    <div class="stat-number" id="avgGoals">-</div>
-                    <div class="stat-label">Goles Promedio x Partido</div>
-                </div>
-            </div>
+            </section>
 
-            <h2>🏆 Top 5 Equipos con Más Victorias</h2>
-            <div class="top-teams" id="topTeams">
-                <div class="loading">Cargando...</div>
-            </div>
+            <!-- Historial de predicciones -->
+            <section class="card">
+                <div class="history-header">
+                    <h2 class="card-title" style="margin-bottom:0">
+                        <span class="icon">📜</span> Historial de predicciones
+                    </h2>
+                    <div style="display:flex;align-items:center;gap:0.75rem">
+                        <span class="history-count" id="historyCount">0 predicciones</span>
+                        <button type="button" class="btn-ghost" onclick="clearHistory()">Limpiar</button>
+                    </div>
+                </div>
+                <div class="history-list" id="predictionHistory">
+                    <div class="empty-history">
+                        <div class="big">🏟️</div>
+                        <p>Aún no hay predicciones.</p>
+                        <p style="font-size:0.85rem;margin-top:0.35rem">Usa el predictor arriba y tus resultados aparecerán aquí.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Equipos 2026 -->
+            <section class="card">
+                <h2 class="card-title">
+                    <span class="icon">🌎</span> Clasificados 2026
+                    <span class="badge" id="wc2026Count">48</span>
+                </h2>
+                <div class="wc2026-grid" id="wc2026Teams">
+                    <div class="loading">Cargando equipos...</div>
+                </div>
+            </section>
+
+            <!-- Estadísticas -->
+            <section class="card">
+                <h2 class="card-title"><span class="icon">📊</span> Datos históricos FIFA</h2>
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <div class="stat-number" id="totalMatches">-</div>
+                        <div class="stat-label">Partidos en BD</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-number" id="totalGoals">-</div>
+                        <div class="stat-label">Goles totales</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-number" id="avgGoals">-</div>
+                        <div class="stat-label">Promedio / partido</div>
+                    </div>
+                </div>
+                <h2 class="card-title" style="margin-top:1rem"><span class="icon">🏆</span> Más victorias</h2>
+                <div class="top-teams" id="topTeams">
+                    <div class="loading">Cargando...</div>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2 class="card-title"><span class="icon">📅</span> Rendimiento por mundial</h2>
+                <div class="season-grid" id="seasonGrid">
+                    <div class="loading">Cargando...</div>
+                </div>
+            </section>
         </div>
 
-        <!-- Goles por torneo -->
-        <div class="card">
-            <h2>📅 Rendimiento por Torneo</h2>
-            <div class="season-grid" id="seasonGrid">
-                <div class="loading">Cargando...</div>
-            </div>
-        </div>
-
-        <!-- Predictor -->
-        <div class="card">
-            <h2>🔮 Predecir Partido</h2>
-            <div class="form-row">
-                <select id="home">
-                    <option value="">Selecciona equipo local...</option>
-                </select>
-                <select id="away">
-                    <option value="">Selecciona equipo visitante...</option>
-                </select>
-                <select id="stage">
-                    <option value="Group Stage">Fase de Grupos</option>
-                    <option value="Round of 16">Octavos de Final</option>
-                    <option value="Quarter-finals">Cuartos de Final</option>
-                    <option value="Semi-finals">Semifinal</option>
-                    <option value="Final">Final</option>
-                </select>
-                <button onclick="predict()">Predecir</button>
-            </div>
-            <div class="result" id="result">
-                <div class="teams">
-                    <div class="team"><div class="team-name" id="homeName"></div><div class="match-info">Local</div></div>
-                    <div class="vs">VS</div>
-                    <div class="team"><div class="team-name" id="awayName"></div><div class="match-info">Visitante</div></div>
-                </div>
-                <div class="bars">
-                    <div class="bar-row"><div class="bar-label">Local</div><div class="bar-bg"><div class="bar-fill bar-home" id="barHome"></div></div></div>
-                    <div class="bar-row"><div class="bar-label">Empate</div><div class="bar-bg"><div class="bar-fill bar-draw" id="barDraw"></div></div></div>
-                    <div class="bar-row"><div class="bar-label">Visitante</div><div class="bar-bg"><div class="bar-fill bar-away" id="barAway"></div></div></div>
-                </div>
-                <div class="predicted">Resultado predicho: <span id="predicted"></span></div>
-            </div>
-        </div>
-
-        <!-- Partidos históricos -->
-        <div class="card">
-            <h2>📋 Partidos Históricos</h2>
-            <div class="matches-list" id="matchesList">
-                <div class="loading">Cargando partidos...</div>
-            </div>
-        </div>
-
+        <footer>
+            WorldPredict 2026 · Canadá · México · Estados Unidos · Jun 11 – Jul 19, 2026
+        </footer>
     </div>
 
     <script>
         const API = "https://worldpredict.onrender.com";
+        const HISTORY_KEY = "worldpredict_2026_history";
+        const MAX_HISTORY = 50;
+
+        const STAGE_LABELS = {
+            "Group Stage": "Fase de grupos",
+            "Round of 16": "Octavos",
+            "Quarter-finals": "Cuartos",
+            "Semi-finals": "Semifinal",
+            "Final": "Final",
+            "Third place": "Tercer puesto"
+        };
+
+        function getHistory() {
+            try {
+                return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+            } catch {
+                return [];
+            }
+        }
+
+        function saveToHistory(entry) {
+            const list = getHistory();
+            list.unshift({ ...entry, id: Date.now() });
+            localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, MAX_HISTORY)));
+            renderHistory();
+        }
+
+        function clearHistory() {
+            if (!getHistory().length) return;
+            if (confirm("¿Borrar todo el historial de predicciones?")) {
+                localStorage.removeItem(HISTORY_KEY);
+                renderHistory();
+            }
+        }
+
+        function formatDate(iso) {
+            const d = new Date(iso);
+            return d.toLocaleString("es", {
+                day: "2-digit", month: "short", year: "numeric",
+                hour: "2-digit", minute: "2-digit"
+            });
+        }
+
+        function renderHistory() {
+            const list = getHistory();
+            const el = document.getElementById("predictionHistory");
+            const countEl = document.getElementById("historyCount");
+            countEl.textContent = list.length === 1 ? "1 predicción" : `${list.length} predicciones`;
+
+            if (!list.length) {
+                el.innerHTML = `
+                    <div class="empty-history">
+                        <div class="big">🏟️</div>
+                        <p>Aún no hay predicciones.</p>
+                        <p style="font-size:0.85rem;margin-top:0.35rem">Usa el predictor arriba y tus resultados aparecerán aquí.</p>
+                    </div>`;
+                return;
+            }
+
+            el.innerHTML = list.map(p => `
+                <article class="history-item">
+                    <div class="history-match">
+                        ${escapeHtml(p.home)} <span class="prob">${p.home_win}%</span>
+                        · ${p.draw}% ·
+                        <span class="prob">${p.away_win}%</span> ${escapeHtml(p.away)}
+                    </div>
+                    <div class="history-meta">
+                        ${STAGE_LABELS[p.stage] || p.stage} · Mundial 2026 · ${formatDate(p.date)}
+                    </div>
+                    <div class="history-result">
+                        <span class="result-pill">${escapeHtml(p.predicted_result)}</span>
+                    </div>
+                </article>
+            `).join("");
+        }
+
+        function escapeHtml(s) {
+            const d = document.createElement("div");
+            d.textContent = s;
+            return d.innerHTML;
+        }
 
         async function loadStats() {
-            const res = await fetch(`${API}/stats`);
-            const data = await res.json();
+            try {
+                const res = await fetch(`${API}/stats`);
+                const data = await res.json();
+                document.getElementById("totalMatches").textContent = data.totals.total_matches;
+                document.getElementById("totalGoals").textContent = data.totals.total_goals;
+                const avg = (data.totals.total_goals / data.totals.total_matches).toFixed(1);
+                document.getElementById("avgGoals").textContent = avg;
 
-            document.getElementById("totalMatches").textContent = data.totals.total_matches;
-            document.getElementById("totalGoals").textContent = data.totals.total_goals;
-            const avg = (data.totals.total_goals / data.totals.total_matches).toFixed(1);
-            document.getElementById("avgGoals").textContent = avg;
+                const medals = ["🥇", "🥈", "🥉", "4", "5"];
+                document.getElementById("topTeams").innerHTML = data.top_teams.map((t, i) => `
+                    <div class="list-row">
+                        <span>${medals[i]} ${escapeHtml(t.team)}</span>
+                        <strong>${t.wins} victorias</strong>
+                    </div>`).join("");
 
-            const medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"];
-            document.getElementById("topTeams").innerHTML = data.top_teams.map((t, i) => `
-                <div class="top-team-item">
-                    <div class="top-team-rank">${medals[i]}</div>
-                    <div class="top-team-name">${t.team}</div>
-                    <div class="top-team-wins">${t.wins} victorias</div>
-                </div>`).join("");
-
-            document.getElementById("seasonGrid").innerHTML = data.by_season.map(s => `
-                <div class="season-item">
-                    <div class="season-year">Mundial ${s.season}</div>
-                    <div class="season-detail">
-                        <span>${s.avg_goals} goles/partido</span>
-                        ${s.total_matches} partidos
-                    </div>
-                </div>`).join("");
+                document.getElementById("seasonGrid").innerHTML = data.by_season.slice(0, 8).map(s => `
+                    <div class="list-row">
+                        <span><strong>Mundial ${s.season}</strong></span>
+                        <span style="color:var(--text-muted);font-size:0.8rem">${s.avg_goals} goles/p · ${s.total_matches} pj</span>
+                    </div>`).join("");
+            } catch {
+                document.getElementById("topTeams").innerHTML = '<div class="loading">No se pudieron cargar estadísticas</div>';
+            }
         }
 
         async function loadWorldCup2026Teams() {
@@ -190,9 +732,9 @@
             const data = await res.json();
             document.getElementById("wc2026Count").textContent = data.count || 0;
 
-            if (!data.groups || Object.keys(data.groups).length === 0) {
+            if (!data.groups || !Object.keys(data.groups).length) {
                 document.getElementById("wc2026Teams").innerHTML =
-                    `<div class="loading">${data.message || "Sin datos. Ejecuta data/load_worldcup.py"}</div>`;
+                    `<div class="loading">${data.message || "Sin datos de equipos 2026"}</div>`;
                 return [];
             }
 
@@ -202,7 +744,7 @@
                     <h3>Grupo ${g}</h3>
                     ${data.teams.filter(t => t.group === g).map(t => `
                         <div class="wc2026-team${t.is_host ? " host" : ""}">
-                            <span>${t.display_name}${t.is_host ? " 🏠" : ""}</span>
+                            <span>${escapeHtml(t.display_name)}${t.is_host ? " ★" : ""}</span>
                             <span class="code">${t.team_code}</span>
                         </div>`).join("")}
                 </div>`).join("");
@@ -230,16 +772,6 @@
             });
         }
 
-        async function loadMatches() {
-            const res = await fetch(`${API}/matches`);
-            const matches = await res.json();
-            document.getElementById("matchesList").innerHTML = matches.map(m => `
-                <div class="match-item">
-                    <span>${m.home_team} <span class="match-score">${m.home_score ?? '-'} - ${m.away_score ?? '-'}</span> ${m.away_team}</span>
-                    <span class="match-info">${m.stage} · ${m.season}</span>
-                </div>`).join("");
-        }
-
         async function predict() {
             const home = document.getElementById("home").value;
             const away = document.getElementById("away").value;
@@ -247,40 +779,60 @@
             if (!home || !away) return alert("Selecciona ambos equipos");
             if (home === away) return alert("Selecciona equipos diferentes");
 
-            const res = await fetch(`${API}/predict`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ home_team: home, away_team: away, stage, season: 2026 })
-            });
-            const data = await res.json();
+            const btn = document.querySelector(".btn-predict");
+            btn.textContent = "ANALIZANDO...";
+            btn.disabled = true;
 
-            if (!res.ok || data.error) {
-                alert(data.error || "No se pudo completar la predicción");
-                return;
-            }
-            if (data.home_win == null || data.draw == null || data.away_win == null) {
-                alert("Respuesta inválida del servidor. ¿Desplegaste la API actualizada en Render?");
-                return;
-            }
+            try {
+                const res = await fetch(`${API}/predict`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ home_team: home, away_team: away, stage, season: 2026 })
+                });
+                const data = await res.json();
 
-            document.getElementById("homeName").textContent = home;
-            document.getElementById("awayName").textContent = away;
-            document.getElementById("barHome").style.width = data.home_win + "%";
-            document.getElementById("barHome").textContent = data.home_win + "%";
-            document.getElementById("barDraw").style.width = data.draw + "%";
-            document.getElementById("barDraw").textContent = data.draw + "%";
-            document.getElementById("barAway").style.width = data.away_win + "%";
-            document.getElementById("barAway").textContent = data.away_win + "%";
-            let label = data.predicted_result;
-            if (data.note) label += " — " + data.note;
-            else if (data.method === "database_stats") label += " (basado en historial mundialistas)";
-            document.getElementById("predicted").textContent = label;
-            document.getElementById("result").style.display = "block";
+                if (!res.ok || data.error) {
+                    alert(data.error || "No se pudo completar la predicción");
+                    return;
+                }
+                if (data.home_win == null) {
+                    alert("Respuesta inválida del servidor. Despliega la API actualizada en Render.");
+                    return;
+                }
+
+                document.getElementById("homeName").textContent = home;
+                document.getElementById("awayName").textContent = away;
+                document.getElementById("barHome").style.width = data.home_win + "%";
+                document.getElementById("barHome").textContent = data.home_win + "%";
+                document.getElementById("barDraw").style.width = data.draw + "%";
+                document.getElementById("barDraw").textContent = data.draw + "%";
+                document.getElementById("barAway").style.width = data.away_win + "%";
+                document.getElementById("barAway").textContent = data.away_win + "%";
+
+                let label = data.predicted_result;
+                document.getElementById("predicted").textContent = label;
+                document.getElementById("result").style.display = "block";
+
+                saveToHistory({
+                    home,
+                    away,
+                    stage,
+                    home_win: data.home_win,
+                    draw: data.draw,
+                    away_win: data.away_win,
+                    predicted_result: data.predicted_result,
+                    method: data.method || "ml_model",
+                    date: new Date().toISOString()
+                });
+            } finally {
+                btn.textContent = "PREDECIR";
+                btn.disabled = false;
+            }
         }
 
+        renderHistory();
         loadStats();
         loadTeams();
-        loadMatches();
     </script>
 </body>
 </html>
