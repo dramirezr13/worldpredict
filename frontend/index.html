@@ -139,6 +139,7 @@
         .card.featured {
             border-color: rgba(245, 197, 24, 0.35);
             box-shadow: 0 0 40px rgba(245, 197, 24, 0.08);
+            overflow: visible;
         }
 
         .card-title {
@@ -170,6 +171,13 @@
             display: flex;
             gap: 0.75rem;
             flex-wrap: wrap;
+            overflow: visible;
+            position: relative;
+            z-index: 20;
+        }
+
+        .form-row:has(.custom-select.open) {
+            z-index: 200;
         }
 
         /* Select nativo (respaldo / accesibilidad) */
@@ -229,20 +237,19 @@
 
         .custom-select-menu {
             display: none;
-            position: absolute;
-            top: calc(100% + 6px);
-            left: 0;
-            right: 0;
-            z-index: 100;
+            position: fixed;
+            z-index: 9999;
             background: #0d1224;
-            border: 1px solid rgba(245, 197, 24, 0.4);
+            border: 1px solid rgba(245, 197, 24, 0.55);
             border-radius: 12px;
-            box-shadow: 0 16px 48px rgba(0, 0, 0, 0.65);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.85);
             overflow: hidden;
+            min-width: 200px;
         }
 
         .custom-select.open .custom-select-menu {
-            display: block;
+            display: flex;
+            flex-direction: column;
             animation: menuIn 0.15s ease;
         }
 
@@ -273,9 +280,11 @@
 
         .custom-select-options {
             list-style: none;
-            max-height: 240px;
+            max-height: 280px;
+            min-height: 48px;
             overflow-y: auto;
             padding: 0.35rem 0;
+            flex: 1;
         }
 
         .custom-select-options::-webkit-scrollbar { width: 8px; }
@@ -605,6 +614,102 @@
             font-size: 0.8rem;
             border-top: 1px solid var(--border);
         }
+
+        .simulate-wrap {
+            margin-top: 1.25rem;
+            padding-top: 1.25rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .btn-simulate {
+            width: 100%;
+            padding: 1rem 1.5rem;
+            border: 2px solid var(--gold);
+            border-radius: 12px;
+            background: linear-gradient(135deg, rgba(245, 197, 24, 0.15), rgba(0, 229, 255, 0.08));
+            color: var(--gold);
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 1.4rem;
+            letter-spacing: 0.1em;
+            cursor: pointer;
+            transition: transform 0.15s, box-shadow 0.2s, background 0.2s;
+        }
+
+        .btn-simulate:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 28px rgba(245, 197, 24, 0.25);
+            background: linear-gradient(135deg, rgba(245, 197, 24, 0.28), rgba(0, 229, 255, 0.12));
+        }
+
+        .btn-simulate:disabled {
+            opacity: 0.6;
+            cursor: wait;
+        }
+
+        .sim-result { display: none; margin-top: 1.5rem; animation: fadeIn 0.5s ease; }
+
+        .champion-box {
+            text-align: center;
+            padding: 1.75rem;
+            margin-bottom: 1.25rem;
+            border-radius: 16px;
+            background: linear-gradient(135deg, rgba(245, 197, 24, 0.12), rgba(0, 200, 83, 0.08));
+            border: 2px solid var(--gold);
+        }
+
+        .champion-box .trophy { font-size: 3rem; line-height: 1; }
+        .champion-box .label { font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.15em; margin-top: 0.5rem; }
+        .champion-box .name {
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 2.5rem;
+            color: var(--gold);
+            letter-spacing: 0.06em;
+            margin-top: 0.25rem;
+        }
+
+        .champion-box .sub { color: var(--text-muted); font-size: 0.9rem; margin-top: 0.5rem; }
+
+        .sim-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        @media (max-width: 500px) { .sim-stats { grid-template-columns: 1fr; } }
+
+        .sim-stat {
+            text-align: center;
+            padding: 0.75rem;
+            background: var(--glass);
+            border-radius: 8px;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .sim-stat strong { display: block; color: var(--cyan); font-size: 1.1rem; }
+
+        .knockout-path { display: flex; flex-direction: column; gap: 0.4rem; max-height: 280px; overflow-y: auto; }
+
+        .path-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.55rem 0.85rem;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 8px;
+            font-size: 0.82rem;
+        }
+
+        .path-item .stage-tag {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            color: var(--gold);
+            letter-spacing: 0.08em;
+            min-width: 72px;
+        }
+
+        .path-item .winner { color: var(--green); font-weight: 600; }
     </style>
 </head>
 <body>
@@ -670,6 +775,16 @@
                     <div class="predicted-outcome">
                         Resultado: <span id="predicted"></span>
                     </div>
+                </div>
+
+                <div class="simulate-wrap">
+                    <button type="button" class="btn-simulate" id="btnSimulate" onclick="simulateTournament()">
+                        🏆 SIMULAR MUNDIAL COMPLETO 2026
+                    </button>
+                    <p style="text-align:center;color:var(--text-muted);font-size:0.8rem;margin-top:0.5rem">
+                        72 partidos · 12 grupos · fase eliminatoria hasta el campeón
+                    </p>
+                    <div class="sim-result" id="simResult"></div>
                 </div>
             </section>
 
@@ -745,6 +860,18 @@
         const HISTORY_KEY = "worldpredict_2026_history";
         const MAX_HISTORY = 50;
 
+        const FALLBACK_TEAMS = [
+            "Algeria", "Argentina", "Australia", "Austria", "Belgium",
+            "Bosnia and Herzegovina", "Brazil", "Canada", "Cape Verde", "Colombia",
+            "Costa Rica", "Croatia", "Curaçao", "Czech Republic", "DR Congo",
+            "Ecuador", "Egypt", "England", "France", "Germany", "Ghana", "Haiti",
+            "Iran", "Iraq", "Ivory Coast", "Japan", "Jordan", "Mexico", "Morocco",
+            "Netherlands", "New Zealand", "Norway", "Panama", "Paraguay", "Portugal",
+            "Qatar", "Saudi Arabia", "Scotland", "Senegal", "South Africa",
+            "South Korea", "Spain", "Sweden", "Switzerland", "Tunisia", "Turkey",
+            "United States", "Uruguay", "Uzbekistan"
+        ].sort();
+
         const STAGE_LABELS = {
             "Group Stage": "Fase de grupos",
             "Round of 16": "Octavos",
@@ -753,6 +880,18 @@
             "Final": "Final",
             "Third place": "Tercer puesto"
         };
+
+        function normalizeSearch(s) {
+            return s.trim().toLowerCase()
+                .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        }
+
+        function positionMenu(wrap, trigger, menu) {
+            const rect = trigger.getBoundingClientRect();
+            menu.style.top = `${rect.bottom + 6}px`;
+            menu.style.left = `${rect.left}px`;
+            menu.style.width = `${Math.max(rect.width, 220)}px`;
+        }
 
         function enhanceSelect(selectEl) {
             if (selectEl.dataset.enhanced) return;
@@ -772,13 +911,14 @@
             const menu = document.createElement("div");
             menu.className = "custom-select-menu";
 
-            const searchable = selectEl.options.length > 8;
+            const searchable = selectEl.id === "home" || selectEl.id === "away";
             let search = null;
             if (searchable) {
                 search = document.createElement("input");
                 search.type = "text";
                 search.className = "custom-select-search";
                 search.placeholder = "Buscar equipo...";
+                search.autocomplete = "off";
                 menu.appendChild(search);
             }
 
@@ -788,6 +928,8 @@
 
             wrap.appendChild(trigger);
             wrap.appendChild(menu);
+
+            function stopInside(e) { e.stopPropagation(); }
 
             function syncTrigger() {
                 const opt = selectEl.options[selectEl.selectedIndex];
@@ -801,64 +943,79 @@
             }
 
             function buildOptions(filter = "") {
-                const q = filter.trim().toLowerCase();
+                const q = normalizeSearch(filter);
                 list.innerHTML = "";
                 let visible = 0;
                 [...selectEl.options].forEach((opt, i) => {
                     if (i === 0 && !opt.value) return;
                     const label = opt.textContent;
-                    if (q && !label.toLowerCase().includes(q)) return;
+                    if (q && !normalizeSearch(label).includes(q)) return;
                     visible++;
                     const li = document.createElement("li");
                     li.className = "custom-select-option";
                     if (opt.value === selectEl.value) li.classList.add("selected");
                     li.textContent = label;
                     li.dataset.value = opt.value;
-                    li.addEventListener("click", () => {
+                    li.addEventListener("mousedown", (e) => {
+                        e.preventDefault();
                         selectEl.value = opt.value;
                         syncTrigger();
                         wrap.classList.remove("open");
-                        list.querySelectorAll(".custom-select-option").forEach(el => {
-                            el.classList.toggle("selected", el.dataset.value === selectEl.value);
-                        });
                     });
                     list.appendChild(li);
                 });
                 if (!visible) {
                     const empty = document.createElement("li");
                     empty.className = "custom-select-empty";
-                    empty.textContent = "Sin resultados";
+                    empty.textContent = q ? `Sin resultados para "${filter.trim()}"` : "No hay equipos cargados";
                     list.appendChild(empty);
                 }
             }
 
-            trigger.addEventListener("click", (e) => {
-                e.stopPropagation();
+            function openMenu() {
                 document.querySelectorAll(".custom-select.open").forEach(el => {
                     if (el !== wrap) el.classList.remove("open");
                 });
-                wrap.classList.toggle("open");
+                wrap.classList.add("open");
+                positionMenu(wrap, trigger, menu);
+                buildOptions(search ? search.value : "");
+                if (search) {
+                    setTimeout(() => search.focus(), 0);
+                }
+            }
+
+            trigger.addEventListener("click", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
                 if (wrap.classList.contains("open")) {
-                    buildOptions(search?.value || "");
-                    if (search) {
-                        search.value = "";
-                        search.focus();
-                    }
+                    wrap.classList.remove("open");
+                } else {
+                    openMenu();
                 }
             });
 
             if (search) {
                 search.addEventListener("input", () => buildOptions(search.value));
-                search.addEventListener("click", (e) => e.stopPropagation());
+                search.addEventListener("mousedown", stopInside);
+                search.addEventListener("click", stopInside);
             }
+            menu.addEventListener("mousedown", stopInside);
+
+            window.addEventListener("resize", () => {
+                if (wrap.classList.contains("open")) positionMenu(wrap, trigger, menu);
+            });
 
             selectEl.addEventListener("change", syncTrigger);
-            wrap._rebuildOptions = () => buildOptions(search?.value || "");
+            wrap._rebuildOptions = () => {
+                buildOptions(search?.value || "");
+                syncTrigger();
+            };
             buildOptions();
             syncTrigger();
         }
 
-        document.addEventListener("click", () => {
+        document.addEventListener("mousedown", (e) => {
+            if (e.target.closest(".custom-select")) return;
             document.querySelectorAll(".custom-select.open").forEach(el => el.classList.remove("open"));
         });
 
@@ -983,30 +1140,120 @@
             return data.teams.map(t => t.team_name).sort();
         }
 
+        function fillTeamSelect(selectEl, teams) {
+            while (selectEl.options.length > 1) selectEl.remove(1);
+            teams.forEach(t => {
+                const o = document.createElement("option");
+                o.value = t;
+                o.textContent = t;
+                selectEl.appendChild(o);
+            });
+        }
+
         async function loadTeams() {
-            let sorted = await loadWorldCup2026Teams();
-            if (!sorted.length) {
-                const res = await fetch(`${API}/matches`);
-                const matches = await res.json();
-                const teams = new Set();
-                matches.forEach(m => { teams.add(m.home_team); teams.add(m.away_team); });
-                sorted = [...teams].sort();
-            }
-            ["home", "away", "stage"].forEach(id => {
-                const sel = document.getElementById(id);
-                if (id === "home" || id === "away") {
-                    while (sel.options.length > 1) sel.remove(1);
-                    sorted.forEach(t => {
-                        const o = document.createElement("option");
-                        o.value = t;
-                        o.textContent = t;
-                        sel.appendChild(o);
-                    });
+            let sorted = [];
+            try {
+                const res = await fetch(`${API}/worldcup/2026/teams`);
+                const data = await res.json();
+                if (data.teams?.length) {
+                    sorted = data.teams.map(t => t.team_name).sort();
                 }
+            } catch (e) {
+                console.warn("API equipos 2026:", e);
+            }
+
+            if (!sorted.length) {
+                try {
+                    const res = await fetch(`${API}/matches`);
+                    const matches = await res.json();
+                    const teams = new Set();
+                    matches.forEach(m => { teams.add(m.home_team); teams.add(m.away_team); });
+                    sorted = [...teams].sort();
+                } catch (e) {
+                    console.warn("API matches:", e);
+                }
+            }
+
+            if (!sorted.length) sorted = [...FALLBACK_TEAMS];
+
+            const home = document.getElementById("home");
+            const away = document.getElementById("away");
+            fillTeamSelect(home, sorted);
+            fillTeamSelect(away, sorted);
+
+            [home, away, document.getElementById("stage")].forEach(sel => {
                 const wrap = sel.closest(".custom-select");
                 if (wrap?._rebuildOptions) wrap._rebuildOptions();
                 else enhanceSelect(sel);
             });
+        }
+
+        const STAGE_LABELS_SIM = {
+            "Group Stage": "Grupos",
+            "Round of 32": "Dieciseisavos",
+            "Round of 16": "Octavos",
+            "Quarter-finals": "Cuartos",
+            "Semi-finals": "Semifinal",
+            "Final": "Final"
+        };
+
+        async function simulateTournament() {
+            const btn = document.getElementById("btnSimulate");
+            const box = document.getElementById("simResult");
+            btn.disabled = true;
+            btn.textContent = "SIMULANDO 72 PARTIDOS...";
+            box.style.display = "none";
+
+            try {
+                const res = await fetch(`${API}/worldcup/2026/simulate`, { method: "POST" });
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    alert(data.error || "No se pudo simular el torneo. ¿API actualizada en Render?");
+                    return;
+                }
+
+                const ko = data.knockout_bracket || [];
+                const pathHtml = ko.map(m => `
+                    <div class="path-item">
+                        <span class="stage-tag">${STAGE_LABELS_SIM[m.stage] || m.stage}</span>
+                        <span>${escapeHtml(m.home)} ${m.home_score}-${m.away_score} ${escapeHtml(m.away)}</span>
+                        <span class="winner">→ ${escapeHtml(m.winner)}</span>
+                    </div>`).join("");
+
+                box.innerHTML = `
+                    <div class="champion-box">
+                        <div class="trophy">🏆</div>
+                        <div class="label">Campeón predicho</div>
+                        <div class="name">${escapeHtml(data.champion)}</div>
+                        <div class="sub">Subcampeón: ${escapeHtml(data.runner_up)}</div>
+                    </div>
+                    <div class="sim-stats">
+                        <div class="sim-stat"><strong>${data.total_matches}</strong> partidos simulados</div>
+                        <div class="sim-stat"><strong>${data.group_stage_matches}</strong> fase de grupos</div>
+                        <div class="sim-stat"><strong>${data.knockout_matches}</strong> eliminatorias</div>
+                    </div>
+                    <h3 class="card-title" style="font-size:1rem;margin-bottom:0.75rem">Ruta del campeón</h3>
+                    <div class="knockout-path">${pathHtml}</div>`;
+                box.style.display = "block";
+
+                saveToHistory({
+                    home: data.champion,
+                    away: data.runner_up,
+                    stage: "Final",
+                    home_win: 100,
+                    draw: 0,
+                    away_win: 0,
+                    predicted_result: `Campeón: ${data.champion}`,
+                    method: "tournament_sim",
+                    date: new Date().toISOString()
+                });
+            } catch (e) {
+                alert("Error de conexión al simular. Verifica la API en Render.");
+                console.error(e);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = "🏆 SIMULAR MUNDIAL COMPLETO 2026";
+            }
         }
 
         async function predict() {
@@ -1069,6 +1316,7 @@
 
         renderHistory();
         loadStats();
+        loadWorldCup2026Teams();
         loadTeams();
     </script>
 </body>

@@ -17,9 +17,11 @@ try:
         predict_from_stats,
         resolve_model_team,
     )
+    from tournament_sim import simulate_worldcup_2026
 except ImportError:
     FIFA_DISPLAY_NAMES = {}
     get_team_stats_combined = predict_from_stats = resolve_model_team = None
+    simulate_worldcup_2026 = None
 
 load_dotenv()
 
@@ -174,6 +176,15 @@ def worldcup_2026_teams():
         "teams": teams,
         "groups": groups,
     })
+
+
+@app.route("/worldcup/2026/simulate", methods=["POST"])
+def simulate_worldcup():
+    if simulate_worldcup_2026 is None:
+        return jsonify({"error": "Módulo de simulación no disponible"}), 500
+    with engine.connect() as conn:
+        result = simulate_worldcup_2026(conn, model, le, LABEL_CLASSES)
+    return jsonify(result)
 
 
 @app.route("/stats")
