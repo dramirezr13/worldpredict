@@ -250,9 +250,18 @@
             const res = await fetch(`${API}/predict`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ home_team: home, away_team: away, stage })
+                body: JSON.stringify({ home_team: home, away_team: away, stage, season: 2026 })
             });
             const data = await res.json();
+
+            if (!res.ok || data.error) {
+                alert(data.error || "No se pudo completar la predicción");
+                return;
+            }
+            if (data.home_win == null || data.draw == null || data.away_win == null) {
+                alert("Respuesta inválida del servidor. ¿Desplegaste la API actualizada en Render?");
+                return;
+            }
 
             document.getElementById("homeName").textContent = home;
             document.getElementById("awayName").textContent = away;
@@ -262,7 +271,10 @@
             document.getElementById("barDraw").textContent = data.draw + "%";
             document.getElementById("barAway").style.width = data.away_win + "%";
             document.getElementById("barAway").textContent = data.away_win + "%";
-            document.getElementById("predicted").textContent = data.predicted_result;
+            let label = data.predicted_result;
+            if (data.note) label += " — " + data.note;
+            else if (data.method === "database_stats") label += " (basado en historial mundialistas)";
+            document.getElementById("predicted").textContent = label;
             document.getElementById("result").style.display = "block";
         }
 

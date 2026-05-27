@@ -12,8 +12,14 @@ if sys_path not in __import__("sys").path:
 
 try:
     from worldcup_2026 import FIFA_DISPLAY_NAMES
+    from prediction_utils import (
+        get_team_stats_combined,
+        predict_from_stats,
+        resolve_model_team,
+    )
 except ImportError:
     FIFA_DISPLAY_NAMES = {}
+    get_team_stats_combined = predict_from_stats = resolve_model_team = None
 
 load_dotenv()
 
@@ -29,24 +35,12 @@ with open(os.path.join(BASE_DIR, "models/model.pkl"), "rb") as f:
 with open(os.path.join(BASE_DIR, "models/label_encoder.pkl"), "rb") as f:
     le = pickle.load(f)
 
+LABEL_CLASSES = set(le.classes_)
+
 STAGE_MAP = {
     "Group Stage": 1, "Round of 16": 2, "Quarter-finals": 3,
     "Semi-finals": 4, "Third place": 5, "Final": 6
 }
-
-def get_team_stats(conn, team, season=2022):
-    result = conn.execute(text("""
-        SELECT wins, draws, losses, goals_for, goals_against, matches_played
-        FROM team_stats WHERE team = :team
-        ORDER BY ABS(season - :season) ASC LIMIT 1
-    """), {"team": team, "season": season}).fetchone()
-    if result:
-        s = dict(result._mapping)
-        s["win_rate"] = s["wins"] / (s["matches_played"] + 1)
-        s["goal_diff"] = s["goals_for"] - s["goals_against"]
-        return s
-    return {"wins": 0, "draws": 0, "losses": 0, "goals_for": 0,
-            "goals_against": 0, "matches_played": 0, "win_rate": 0, "goal_diff": 0}
 
 @app.route("/health")
 def health():
@@ -65,40 +59,67 @@ def get_matches():
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    data = request.json
+    data = request.json or {}
     home = data.get("home_team")
     away = data.get("away_team")
     stage = data.get("stage", "Group Stage")
-    season = data.get("season", 2026)
+    season = int(data.get("season", 2026))
 
-    try:
-        home_enc = le.transform([home])[0]
-        away_enc = le.transform([away])[0]
-    except ValueError:
-        return jsonify({"error": "Equipo no reconocido en el modelo"}), 400
+    if not home or not away:
+        return jsonify({"error": "home_team y away_team son obligatorios"}), 400
+    if home == away:
+        return jsonify({"error": "Selecciona equipos diferentes"}), 400
 
     with engine.connect() as conn:
-        hs = get_team_stats(conn, home, season)
-        as_ = get_team_stats(conn, away, season)
+        hs = get_team_stats_combined(conn, home, season)
+        as_ = get_team_stats_combined(conn, away, season)
 
-    stage_enc = STAGE_MAP.get(stage, 1)
-    features = np.array([[
-        home_enc, away_enc, stage_enc, season,
-        hs["win_rate"], as_["win_rate"],
-        hs["goal_diff"], as_["goal_diff"],
-        hs["wins"], as_["wins"],
-        hs["draws"], as_["draws"]
-    ]])
+        home_model = resolve_model_team(home, LABEL_CLASSES)
+        away_model = resolve_model_team(away, LABEL_CLASSES)
 
-    probs = model.predict_proba(features)[0]
+        if not home_model or not away_model:
+            result = predict_from_stats(hs, as_)
+            result.update({
+                "home_team": home,
+                "away_team": away,
+                "home_stats": _public_stats(hs),
+                "away_stats": _public_stats(as_),
+                "note": "Predicción por historial en base de datos (equipo sin modelo ML).",
+            })
+            return jsonify(result)
+
+        home_enc = le.transform([home_model])[0]
+        away_enc = le.transform([away_model])[0]
+        stage_enc = STAGE_MAP.get(stage, 1)
+        features = np.array([[
+            home_enc, away_enc, stage_enc, season,
+            hs["win_rate"], as_["win_rate"],
+            hs["goal_diff"], as_["goal_diff"],
+            hs["wins"], as_["wins"],
+            hs["draws"], as_["draws"],
+        ]])
+        probs = model.predict_proba(features)[0]
+
     return jsonify({
         "home_team": home,
         "away_team": away,
         "home_win": round(float(probs[0]) * 100, 1),
         "draw": round(float(probs[1]) * 100, 1),
         "away_win": round(float(probs[2]) * 100, 1),
-        "predicted_result": ["Local", "Empate", "Visitante"][np.argmax(probs)]
+        "predicted_result": ["Local", "Empate", "Visitante"][int(np.argmax(probs))],
+        "method": "ml_model",
+        "home_stats": _public_stats(hs),
+        "away_stats": _public_stats(as_),
     })
+
+
+def _public_stats(s):
+    return {
+        "matches_played": s["matches_played"],
+        "wins": s["wins"],
+        "win_rate": round(s["win_rate"] * 100, 1),
+        "goal_diff": s["goal_diff"],
+    }
 
 @app.route("/history/<team>")
 def team_history(team):
