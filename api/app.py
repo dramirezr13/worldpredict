@@ -13,7 +13,7 @@ CORS(app)
 
 engine = create_engine(os.getenv("DATABASE_URL"))
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 with open(os.path.join(BASE_DIR, "models/model.pkl"), "rb") as f:
     model = pickle.load(f)
