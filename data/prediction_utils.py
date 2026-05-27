@@ -7,7 +7,7 @@ MODEL_TEAM_ALIASES = {
     "South Korea": "Korea Republic",
     "United States": "USA",
     "Iran": "IR Iran",
-    "Bosnia and Herzegovina": 'rn">Bosnia and Herzegovina',
+    "Bosnia and Herzegovina": "Bosnia and Herzegovina",
     "DR Congo": "Zaire",
 }
 
@@ -167,3 +167,36 @@ def _fixed_probs(home_pct: float, draw_pct: float, away_pct: float, result: str)
         "predicted_result": result,
         "method": "database_stats",
     }
+
+
+KNOCKOUT_STAGES = frozenset({
+    "Round of 32", "Round of 16", "Quarter-finals", "Semi-finals", "Final",
+})
+
+
+def pick_outcome_from_probs(probs: dict, stage: str = "Group Stage") -> str:
+    """'home' | 'draw' | 'away' — misma lógica que la simulación del torneo."""
+    h, d, a = probs["home_win"], probs["draw"], probs["away_win"]
+    allow_draw = stage not in KNOCKOUT_STAGES
+    if allow_draw and d >= h and d >= a:
+        return "draw"
+    if h >= a:
+        return "home"
+    return "away"
+
+
+def estimate_score_from_probs(probs: dict, stage: str = "Group Stage") -> tuple[int, int]:
+    """Marcador estimado coherente con probabilidades y fase."""
+    outcome = pick_outcome_from_probs(probs, stage)
+    if outcome == "home":
+        return (2, 0) if probs["home_win"] > 55 else (2, 1)
+    if outcome == "away":
+        return (0, 2) if probs["away_win"] > 55 else (1, 2)
+    return (1, 1)
+
+
+def attach_predicted_score(result: dict, stage: str = "Group Stage") -> dict:
+    hs, as_ = estimate_score_from_probs(result, stage)
+    result["predicted_score"] = {"home": hs, "away": as_}
+    result["score_display"] = f"{hs} - {as_}"
+    return result

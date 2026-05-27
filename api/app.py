@@ -13,6 +13,7 @@ if sys_path not in __import__("sys").path:
 try:
     from worldcup_2026 import FIFA_DISPLAY_NAMES
     from prediction_utils import (
+        attach_predicted_score,
         get_team_stats_combined,
         predict_from_stats,
         resolve_model_team,
@@ -88,7 +89,7 @@ def predict():
                 "away_stats": _public_stats(as_),
                 "note": "Predicción por historial en base de datos (equipo sin modelo ML).",
             })
-            return jsonify(result)
+            return jsonify(attach_predicted_score(result, stage))
 
         home_enc = le.transform([home_model])[0]
         away_enc = le.transform([away_model])[0]
@@ -102,7 +103,7 @@ def predict():
         ]])
         probs = model.predict_proba(features)[0]
 
-    return jsonify({
+    return jsonify(attach_predicted_score({
         "home_team": home,
         "away_team": away,
         "home_win": round(float(probs[0]) * 100, 1),
@@ -112,7 +113,7 @@ def predict():
         "method": "ml_model",
         "home_stats": _public_stats(hs),
         "away_stats": _public_stats(as_),
-    })
+    }, stage))
 
 
 def _public_stats(s):
