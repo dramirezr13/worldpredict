@@ -893,6 +893,33 @@
             menu.style.width = `${Math.max(rect.width, 220)}px`;
         }
 
+        function closeAllSelectMenus() {
+            document.querySelectorAll(".custom-select.open").forEach(el => {
+                el.classList.remove("open");
+                el._menu?.classList.remove("open");
+            });
+        }
+
+        function syncOpenSelectMenus(e) {
+            document.querySelectorAll(".custom-select.open").forEach(wrap => {
+                if (!wrap._trigger || !wrap._menu?.classList.contains("open")) return;
+                if (e?.type === "scroll" && e.target?.closest?.(".custom-select-menu")) return;
+                const rect = wrap._trigger.getBoundingClientRect();
+                if (rect.bottom < 0 || rect.top > window.innerHeight) {
+                    wrap.classList.remove("open");
+                    wrap._menu.classList.remove("open");
+                    return;
+                }
+                positionMenu(wrap._trigger, wrap._menu);
+            });
+        }
+
+        if (!window._customSelectScrollBound) {
+            window._customSelectScrollBound = true;
+            window.addEventListener("scroll", syncOpenSelectMenus, { capture: true, passive: true });
+            window.addEventListener("resize", syncOpenSelectMenus, { passive: true });
+        }
+
         function enhanceSelect(selectEl) {
             if (selectEl.dataset.enhanced) return;
             selectEl.dataset.enhanced = "1";
@@ -969,6 +996,7 @@
                             syncTrigger();
                         }
                         wrap.classList.remove("open");
+                        menu.classList.remove("open");
                     });
                     list.appendChild(li);
                 });
@@ -981,15 +1009,7 @@
             }
 
             function openMenu() {
-                document.querySelectorAll(".custom-select.open").forEach(el => {
-                    if (el !== wrap) {
-                        el.classList.remove("open");
-                        el._menu?.classList.remove("open");
-                    }
-                });
-                document.querySelectorAll(".custom-select-menu.open").forEach(m => {
-                    if (m !== menu) m.classList.remove("open");
-                });
+                closeAllSelectMenus();
                 wrap.classList.add("open");
                 menu.classList.add("open");
                 positionMenu(trigger, menu);
@@ -1029,10 +1049,7 @@
         document.addEventListener("pointerdown", (e) => {
             if (e.target.closest(".custom-select")) return;
             if (e.target.closest(".custom-select-menu")) return;
-            document.querySelectorAll(".custom-select.open").forEach(el => {
-                el.classList.remove("open");
-                el._menu?.classList.remove("open");
-            });
+            closeAllSelectMenus();
         });
 
         function getHistory() {
