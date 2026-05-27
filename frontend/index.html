@@ -437,7 +437,14 @@
 
         .bars { display: flex; flex-direction: column; gap: 0.65rem; }
         .bar-row { display: flex; align-items: center; gap: 0.75rem; }
-        .bar-label { width: 72px; font-size: 0.8rem; color: var(--text-muted); font-weight: 500; }
+        .bar-label {
+            width: 88px;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            font-weight: 500;
+            line-height: 1.15;
+            word-break: break-word;
+        }
         .bar-bg {
             flex: 1;
             height: 32px;
@@ -598,8 +605,11 @@
         .donut-hole .pct-label {
             font-size: 0.65rem;
             color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
+            letter-spacing: 0.02em;
+            max-width: 5.5rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
 
         .bar-chart {
@@ -649,10 +659,33 @@
         .bar-col .pillar.away { background: linear-gradient(180deg, #ef5350, #c62828); }
 
         .bar-col .lbl {
+            font-size: 0.68rem;
+            color: var(--text-muted);
+            letter-spacing: 0.02em;
+            text-align: center;
+            max-width: 76px;
+            line-height: 1.15;
+            word-break: break-word;
+        }
+
+        .form-field {
+            flex: 1;
+            min-width: 160px;
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+        }
+
+        .form-field label {
             font-size: 0.72rem;
+            font-weight: 600;
             color: var(--text-muted);
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            letter-spacing: 0.06em;
+        }
+
+        .form-field .custom-select {
+            min-width: 0;
         }
 
         .chart-legend {
@@ -1025,12 +1058,18 @@
             <section class="card featured">
                 <h2 class="card-title"><span class="icon">⚽</span> Predecir partido</h2>
                 <div class="form-row">
-                    <select id="home">
-                        <option value="">Equipo local...</option>
-                    </select>
-                    <select id="away">
-                        <option value="">Equipo visitante...</option>
-                    </select>
+                    <div class="form-field">
+                        <label for="home">Equipo 1</label>
+                        <select id="home">
+                            <option value="">Seleccionar equipo...</option>
+                        </select>
+                    </div>
+                    <div class="form-field">
+                        <label for="away">Equipo 2</label>
+                        <select id="away">
+                            <option value="">Seleccionar equipo...</option>
+                        </select>
+                    </div>
                     <select id="stage">
                         <option value="Group Stage">Fase de grupos</option>
                         <option value="Round of 16">Octavos de final</option>
@@ -1044,17 +1083,15 @@
                     <div class="matchup">
                         <div class="team-block">
                             <div class="name" id="homeName"></div>
-                            <div class="role">Local</div>
                         </div>
                         <div class="vs-badge">VS</div>
                         <div class="team-block">
                             <div class="name" id="awayName"></div>
-                            <div class="role">Visitante</div>
                         </div>
                     </div>
                     <div class="bars">
                         <div class="bar-row">
-                            <div class="bar-label">Local</div>
+                            <div class="bar-label" id="barLabelHome">—</div>
                             <div class="bar-bg"><div class="bar-fill bar-home" id="barHome"></div></div>
                         </div>
                         <div class="bar-row">
@@ -1062,7 +1099,7 @@
                             <div class="bar-bg"><div class="bar-fill bar-draw" id="barDraw"></div></div>
                         </div>
                         <div class="bar-row">
-                            <div class="bar-label">Visitante</div>
+                            <div class="bar-label" id="barLabelAway">—</div>
                             <div class="bar-bg"><div class="bar-fill bar-away" id="barAway"></div></div>
                         </div>
                     </div>
@@ -1175,7 +1212,7 @@
             "United States", "Uruguay", "Uzbekistan"
         ].sort();
 
-        /** Código ISO-3 (BD) → ISO-2 para emoji / flagcdn */
+        /** Código ISO-3 (BD) → código flagcdn (ISO-2 o gb-eng, gb-sct) */
         const ISO3_TO_ISO2 = {
             DZA: "dz", ARG: "ar", AUS: "au", AUT: "at", BEL: "be", BIH: "ba",
             BRA: "br", CAN: "ca", CPV: "cv", COL: "co", CRI: "cr", HRV: "hr",
@@ -1225,24 +1262,13 @@
             return teamCodeByName[teamName] || "";
         }
 
-        function iso2ToEmoji(iso2) {
-            const c = iso2.toUpperCase();
-            if (c.length !== 2) return "";
-            return [...c].map(ch =>
-                String.fromCodePoint(0x1F1E6 + ch.charCodeAt(0) - 65)
-            ).join("");
-        }
-
         function teamFlagMarkup(code3) {
             if (!code3) return '<span class="team-flag" aria-hidden="true">⚽</span>';
             const iso = ISO3_TO_ISO2[code3.toUpperCase()];
             if (!iso) return '<span class="team-flag" aria-hidden="true">⚽</span>';
-            if (iso.length === 2) {
-                const emoji = iso2ToEmoji(iso);
-                return `<span class="team-flag" aria-hidden="true">${emoji}</span>`;
-            }
             const src = `https://flagcdn.com/24x18/${iso}.png`;
-            return `<img class="team-flag team-flag--img" src="${src}" alt="" width="24" height="18" loading="lazy">`;
+            const src2x = `https://flagcdn.com/48x36/${iso}.png`;
+            return `<img class="team-flag team-flag--img" src="${src}" srcset="${src2x} 2x" alt="" width="24" height="18" loading="lazy" decoding="async">`;
         }
 
         function renderTeamLine(teamName, code3) {
@@ -1525,16 +1551,30 @@
             return `${s.home} - ${s.away}`;
         }
 
-        function renderDonutChart(h, d, a) {
+        function shortChartLabel(name, max = 14) {
+            if (!name) return "";
+            if (name === "Empate") return name;
+            return name.length > max ? `${name.slice(0, max - 1)}…` : name;
+        }
+
+        function formatPredictedResult(apiResult, homeTeam, awayTeam) {
+            if (apiResult === "Local") return homeTeam;
+            if (apiResult === "Visitante") return awayTeam;
+            if (apiResult === "Empate") return "Empate";
+            return apiResult;
+        }
+
+        function renderDonutChart(h, d, a, homeTeam, awayTeam) {
             const total = h + d + a || 1;
             const pH = (h / total) * 100;
             const pD = (d / total) * 100;
             const pA = (a / total) * 100;
             const dominant = [
-                { key: "Local", pct: pH },
+                { key: homeTeam, pct: pH },
                 { key: "Empate", pct: pD },
-                { key: "Visitante", pct: pA },
+                { key: awayTeam, pct: pA },
             ].sort((x, y) => y.pct - x.pct)[0];
+            const dominantLabel = shortChartLabel(dominant.key, 12);
             const grad = `conic-gradient(
                 #42a5f5 0% ${pH}%,
                 #9fa8da ${pH}% ${pH + pD}%,
@@ -1545,18 +1585,18 @@
                     <div class="donut-ring" style="background:${grad}"></div>
                     <div class="donut-hole">
                         <div class="pct-main">${dominant.pct.toFixed(0)}%</div>
-                        <div class="pct-label">${dominant.key}</div>
+                        <div class="pct-label" title="${escapeHtml(dominant.key)}">${escapeHtml(dominantLabel)}</div>
                     </div>
                 </div>
             `;
         }
 
-        function renderVerticalBarChart(h, d, a) {
+        function renderVerticalBarChart(h, d, a, homeTeam, awayTeam) {
             const max = Math.max(h, d, a, 1);
             const cols = [
-                { cls: "home", lbl: "Local", pct: h },
+                { cls: "home", lbl: homeTeam, pct: h },
                 { cls: "draw", lbl: "Empate", pct: d },
-                { cls: "away", lbl: "Visitante", pct: a },
+                { cls: "away", lbl: awayTeam, pct: a },
             ];
             return `
                 <div class="bar-chart">
@@ -1566,14 +1606,14 @@
                             <div class="pillar-wrap">
                                 <div class="pillar ${c.cls}" style="height:${(c.pct / max) * 100}%"></div>
                             </div>
-                            <div class="lbl">${c.lbl}</div>
+                            <div class="lbl" title="${escapeHtml(c.lbl)}">${escapeHtml(shortChartLabel(c.lbl, 16))}</div>
                         </div>
                     `).join("")}
                 </div>
                 <div class="chart-legend">
-                    <span class="lg-home">Victoria local</span>
+                    <span class="lg-home">${escapeHtml(homeTeam)}</span>
                     <span class="lg-draw">Empate</span>
-                    <span class="lg-away">Victoria visitante</span>
+                    <span class="lg-away">${escapeHtml(awayTeam)}</span>
                 </div>
             `;
         }
@@ -1599,9 +1639,9 @@
             return `
                 ${renderScoreboard(home, away, score)}
                 <div class="chart-panel match-chart" style="margin-top:1.25rem">
-                    ${renderDonutChart(h, d, a)}
+                    ${renderDonutChart(h, d, a, home, away)}
                     <div>
-                        ${renderVerticalBarChart(h, d, a)}
+                        ${renderVerticalBarChart(h, d, a, home, away)}
                     </div>
                 </div>
             `;
@@ -1890,8 +1930,10 @@
                     return;
                 }
 
-                document.getElementById("homeName").textContent = home;
-                document.getElementById("awayName").textContent = away;
+                document.getElementById("homeName").innerHTML = renderTeamLine(home, getTeamCode(home));
+                document.getElementById("awayName").innerHTML = renderTeamLine(away, getTeamCode(away));
+                document.getElementById("barLabelHome").textContent = home;
+                document.getElementById("barLabelAway").textContent = away;
                 document.getElementById("barHome").style.width = data.home_win + "%";
                 document.getElementById("barHome").textContent = data.home_win + "%";
                 document.getElementById("barDraw").style.width = data.draw + "%";
@@ -1899,7 +1941,7 @@
                 document.getElementById("barAway").style.width = data.away_win + "%";
                 document.getElementById("barAway").textContent = data.away_win + "%";
 
-                let label = data.predicted_result;
+                const label = formatPredictedResult(data.predicted_result, home, away);
                 const scoreStr = getScoreDisplay(data, stage);
                 document.getElementById("predicted").textContent = `${label} (${scoreStr})`;
                 document.getElementById("result").style.display = "block";
@@ -1912,7 +1954,7 @@
                     home_win: data.home_win,
                     draw: data.draw,
                     away_win: data.away_win,
-                    predicted_result: `${data.predicted_result} · ${scoreStr}`,
+                    predicted_result: `${label} · ${scoreStr}`,
                     method: data.method || "ml_model",
                     date: new Date().toISOString()
                 });
