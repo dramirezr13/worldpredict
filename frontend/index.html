@@ -247,7 +247,7 @@
             min-width: 200px;
         }
 
-        .custom-select.open .custom-select-menu {
+        .custom-select-menu.open {
             display: flex;
             flex-direction: column;
             animation: menuIn 0.15s ease;
@@ -886,7 +886,7 @@
                 .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
         }
 
-        function positionMenu(wrap, trigger, menu) {
+        function positionMenu(trigger, menu) {
             const rect = trigger.getBoundingClientRect();
             menu.style.top = `${rect.bottom + 6}px`;
             menu.style.left = `${rect.left}px`;
@@ -910,6 +910,7 @@
 
             const menu = document.createElement("div");
             menu.className = "custom-select-menu";
+            document.body.appendChild(menu);
 
             const searchable = selectEl.id === "home" || selectEl.id === "away";
             let search = null;
@@ -927,7 +928,8 @@
             menu.appendChild(list);
 
             wrap.appendChild(trigger);
-            wrap.appendChild(menu);
+            wrap._menu = menu;
+            wrap._trigger = trigger;
 
             function stopInside(e) { e.stopPropagation(); }
 
@@ -956,10 +958,16 @@
                     if (opt.value === selectEl.value) li.classList.add("selected");
                     li.textContent = label;
                     li.dataset.value = opt.value;
-                    li.addEventListener("mousedown", (e) => {
+                    li.addEventListener("pointerdown", (e) => {
                         e.preventDefault();
-                        selectEl.value = opt.value;
-                        syncTrigger();
+                        e.stopPropagation();
+                        if (selectEl.value !== opt.value) {
+                            selectEl.value = opt.value;
+                            // Mantener compatibilidad con listeners del <select>
+                            selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+                        } else {
+                            syncTrigger();
+                        }
                         wrap.classList.remove("open");
                     });
                     list.appendChild(li);
@@ -974,10 +982,17 @@
 
             function openMenu() {
                 document.querySelectorAll(".custom-select.open").forEach(el => {
-                    if (el !== wrap) el.classList.remove("open");
+                    if (el !== wrap) {
+                        el.classList.remove("open");
+                        el._menu?.classList.remove("open");
+                    }
+                });
+                document.querySelectorAll(".custom-select-menu.open").forEach(m => {
+                    if (m !== menu) m.classList.remove("open");
                 });
                 wrap.classList.add("open");
-                positionMenu(wrap, trigger, menu);
+                menu.classList.add("open");
+                positionMenu(trigger, menu);
                 buildOptions(search ? search.value : "");
                 if (search) {
                     setTimeout(() => search.focus(), 0);
@@ -989,6 +1004,7 @@
                 e.stopPropagation();
                 if (wrap.classList.contains("open")) {
                     wrap.classList.remove("open");
+                    menu.classList.remove("open");
                 } else {
                     openMenu();
                 }
@@ -996,14 +1012,10 @@
 
             if (search) {
                 search.addEventListener("input", () => buildOptions(search.value));
-                search.addEventListener("mousedown", stopInside);
+                search.addEventListener("pointerdown", stopInside);
                 search.addEventListener("click", stopInside);
             }
-            menu.addEventListener("mousedown", stopInside);
-
-            window.addEventListener("resize", () => {
-                if (wrap.classList.contains("open")) positionMenu(wrap, trigger, menu);
-            });
+            menu.addEventListener("pointerdown", stopInside);
 
             selectEl.addEventListener("change", syncTrigger);
             wrap._rebuildOptions = () => {
@@ -1014,9 +1026,13 @@
             syncTrigger();
         }
 
-        document.addEventListener("mousedown", (e) => {
+        document.addEventListener("pointerdown", (e) => {
             if (e.target.closest(".custom-select")) return;
-            document.querySelectorAll(".custom-select.open").forEach(el => el.classList.remove("open"));
+            if (e.target.closest(".custom-select-menu")) return;
+            document.querySelectorAll(".custom-select.open").forEach(el => {
+                el.classList.remove("open");
+                el._menu?.classList.remove("open");
+            });
         });
 
         function getHistory() {
