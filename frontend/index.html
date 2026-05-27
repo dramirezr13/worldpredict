@@ -235,6 +235,47 @@
             color: var(--text-muted);
         }
 
+        .custom-select-trigger:not(.placeholder) {
+            display: flex;
+            align-items: center;
+        }
+
+        .team-line {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            min-width: 0;
+        }
+
+        .team-line .team-label {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .team-flag {
+            flex-shrink: 0;
+            line-height: 1;
+            font-size: 1.15em;
+        }
+
+        .team-flag--img {
+            width: 22px;
+            height: 16px;
+            object-fit: cover;
+            border-radius: 2px;
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+        }
+
+        .wc2026-team .team-line {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .wc2026-team .code {
+            flex-shrink: 0;
+        }
+
         .custom-select-menu {
             display: none;
             position: fixed;
@@ -294,6 +335,8 @@
         }
 
         .custom-select-option {
+            display: flex;
+            align-items: center;
             padding: 0.6rem 1rem;
             font-size: 0.9rem;
             color: #e8eeff;
@@ -1132,6 +1175,37 @@
             "United States", "Uruguay", "Uzbekistan"
         ].sort();
 
+        /** Código ISO-3 (BD) → ISO-2 para emoji / flagcdn */
+        const ISO3_TO_ISO2 = {
+            DZA: "dz", ARG: "ar", AUS: "au", AUT: "at", BEL: "be", BIH: "ba",
+            BRA: "br", CAN: "ca", CPV: "cv", COL: "co", CRI: "cr", HRV: "hr",
+            CUW: "cw", CZE: "cz", COD: "cd", ECU: "ec", EGY: "eg", ENG: "gb-eng",
+            FRA: "fr", DEU: "de", GHA: "gh", HAI: "ht", IRN: "ir", IRQ: "iq",
+            CIV: "ci", JPN: "jp", JOR: "jo", MEX: "mx", MAR: "ma", NLD: "nl",
+            NZL: "nz", NOR: "no", PAN: "pa", PAR: "py", PRT: "pt", QAT: "qa",
+            SAU: "sa", SCO: "gb-sct", SEN: "sn", ZAF: "za", KOR: "kr", ESP: "es",
+            SWE: "se", CHE: "ch", TUN: "tn", TUR: "tr", USA: "us", URY: "uy",
+            UZB: "uz",
+        };
+
+        /** Nombre interno → código ISO-3 (Mundial 2026) */
+        const STATIC_TEAM_CODES = {
+            Mexico: "MEX", "South Africa": "ZAF", "South Korea": "KOR",
+            "Czech Republic": "CZE", Canada: "CAN", "Bosnia and Herzegovina": "BIH",
+            Qatar: "QAT", Switzerland: "CHE", Brazil: "BRA", Morocco: "MAR",
+            Scotland: "SCO", Haiti: "HAI", "United States": "USA", Australia: "AUS",
+            Paraguay: "PAR", Turkey: "TUR", Germany: "DEU", Ecuador: "ECU",
+            "Ivory Coast": "CIV", "Curaçao": "CUW", Netherlands: "NLD", Japan: "JPN",
+            Tunisia: "TUN", Sweden: "SWE", Belgium: "BEL", Iran: "IRN", Egypt: "EGY",
+            "New Zealand": "NZL", Spain: "ESP", Uruguay: "URY", "Saudi Arabia": "SAU",
+            "Cape Verde": "CPV", France: "FRA", Norway: "NOR", Senegal: "SEN",
+            Iraq: "IRQ", Argentina: "ARG", Austria: "AUT", Algeria: "DZA", Jordan: "JOR",
+            Portugal: "PRT", Colombia: "COL", Uzbekistan: "UZB", "DR Congo": "COD",
+            England: "ENG", Croatia: "HRV", Ghana: "GHA", Panama: "PAN",
+        };
+
+        const teamCodeByName = { ...STATIC_TEAM_CODES };
+
         const STAGE_LABELS = {
             "Group Stage": "Fase de grupos",
             "Round of 16": "Octavos",
@@ -1144,6 +1218,36 @@
         function normalizeSearch(s) {
             return s.trim().toLowerCase()
                 .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        }
+
+        function getTeamCode(teamName) {
+            if (!teamName) return "";
+            return teamCodeByName[teamName] || "";
+        }
+
+        function iso2ToEmoji(iso2) {
+            const c = iso2.toUpperCase();
+            if (c.length !== 2) return "";
+            return [...c].map(ch =>
+                String.fromCodePoint(0x1F1E6 + ch.charCodeAt(0) - 65)
+            ).join("");
+        }
+
+        function teamFlagMarkup(code3) {
+            if (!code3) return '<span class="team-flag" aria-hidden="true">⚽</span>';
+            const iso = ISO3_TO_ISO2[code3.toUpperCase()];
+            if (!iso) return '<span class="team-flag" aria-hidden="true">⚽</span>';
+            if (iso.length === 2) {
+                const emoji = iso2ToEmoji(iso);
+                return `<span class="team-flag" aria-hidden="true">${emoji}</span>`;
+            }
+            const src = `https://flagcdn.com/24x18/${iso}.png`;
+            return `<img class="team-flag team-flag--img" src="${src}" alt="" width="24" height="18" loading="lazy">`;
+        }
+
+        function renderTeamLine(teamName, code3) {
+            const code = code3 || getTeamCode(teamName);
+            return `<span class="team-line">${teamFlagMarkup(code)}<span class="team-label">${escapeHtml(teamName)}</span></span>`;
         }
 
         function positionMenu(trigger, menu) {
@@ -1226,7 +1330,7 @@
                     trigger.textContent = selectEl.options[0]?.textContent || "Seleccionar...";
                     trigger.classList.add("placeholder");
                 } else {
-                    trigger.textContent = opt.textContent;
+                    trigger.innerHTML = renderTeamLine(opt.value, opt.dataset.teamCode);
                     trigger.classList.remove("placeholder");
                 }
             }
@@ -1237,13 +1341,13 @@
                 let visible = 0;
                 [...selectEl.options].forEach((opt, i) => {
                     if (i === 0 && !opt.value) return;
-                    const label = opt.textContent;
+                    const label = opt.value || opt.textContent;
                     if (q && !normalizeSearch(label).includes(q)) return;
                     visible++;
                     const li = document.createElement("li");
                     li.className = "custom-select-option";
                     if (opt.value === selectEl.value) li.classList.add("selected");
-                    li.textContent = label;
+                    li.innerHTML = renderTeamLine(label, opt.dataset.teamCode);
                     li.dataset.value = opt.value;
                     li.addEventListener("pointerdown", (e) => {
                         e.preventDefault();
@@ -1607,11 +1711,14 @@
                     <h3>Grupo ${g}</h3>
                     ${data.teams.filter(t => t.group === g).map(t => `
                         <div class="wc2026-team${t.is_host ? " host" : ""}">
-                            <span>${escapeHtml(t.display_name)}${t.is_host ? " ★" : ""}</span>
-                            <span class="code">${t.team_code}</span>
+                            <span class="team-line">${teamFlagMarkup(t.team_code)}<span class="team-label">${escapeHtml(t.display_name)}${t.is_host ? " ★" : ""}</span></span>
+                            <span class="code">${escapeHtml(t.team_code)}</span>
                         </div>`).join("")}
                 </div>`).join("");
 
+            data.teams.forEach(t => {
+                if (t.team_name && t.team_code) teamCodeByName[t.team_name] = t.team_code;
+            });
             return data.teams.map(t => t.team_name).sort();
         }
 
@@ -1621,6 +1728,7 @@
                 const o = document.createElement("option");
                 o.value = t;
                 o.textContent = t;
+                o.dataset.teamCode = getTeamCode(t);
                 selectEl.appendChild(o);
             });
         }
@@ -1631,6 +1739,9 @@
                 const res = await fetch(`${API}/worldcup/2026/teams`);
                 const data = await res.json();
                 if (data.teams?.length) {
+                    data.teams.forEach(t => {
+                        if (t.team_name && t.team_code) teamCodeByName[t.team_name] = t.team_code;
+                    });
                     sorted = data.teams.map(t => t.team_name).sort();
                 }
             } catch (e) {
