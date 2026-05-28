@@ -15,6 +15,7 @@ try:
     from prediction_utils import (
         apply_champion_boost,
         attach_predicted_score,
+        encode_stage,
         get_team_stats_combined,
         predict_from_stats,
         resolve_model_team,
@@ -40,11 +41,6 @@ with open(os.path.join(BASE_DIR, "models/label_encoder.pkl"), "rb") as f:
     le = pickle.load(f)
 
 LABEL_CLASSES = set(le.classes_)
-
-STAGE_MAP = {
-    "Group Stage": 1, "Round of 16": 2, "Quarter-finals": 3,
-    "Semi-finals": 4, "Third place": 5, "Final": 6
-}
 
 @app.route("/health")
 def health():
@@ -94,7 +90,7 @@ def predict():
 
         home_enc = le.transform([home_model])[0]
         away_enc = le.transform([away_model])[0]
-        stage_enc = STAGE_MAP.get(stage, 1)
+        stage_enc = encode_stage(stage)
         features = np.array([[
             home_enc, away_enc, stage_enc, season,
             hs["win_rate"], as_["win_rate"],
