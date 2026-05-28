@@ -1,5 +1,7 @@
 """Utilidades de predicción: alias de equipos, estadísticas desde BD y fallback."""
 
+from __future__ import annotations
+
 import hashlib
 import random
 
