@@ -222,9 +222,53 @@ KNOCKOUT_STAGES = frozenset({
     "Round of 32", "Round of 16", "Quarter-finals", "Semi-finals", "Final",
 })
 
+# Misma codificación con la que se entrenó el modelo ML
+STAGE_ENCODING = {
+    "Group Stage": 1,
+    "Round of 32": 2,
+    "Round of 16": 2,
+    "Quarter-finals": 3,
+    "Semi-finals": 4,
+    "Third place": 5,
+    "Final": 6,
+}
+
+KNOCKOUT_HOME_EDGE = 3.0
+STRENGTH_WEIGHT = 8.0
+
+
+def encode_stage(stage: str) -> int:
+    return STAGE_ENCODING.get(stage, 1)
+
+
+def _team_strength(stats: dict | None) -> float:
+    if not stats:
+        return 0.5
+    mp = max(int(stats.get("matches_played") or 0), 1)
+    wr = float(stats.get("win_rate") or 0.33)
+    if wr > 1:
+        wr /= 100.0
+    gd = float(stats.get("goal_diff") or 0) / mp
+    return wr * 0.6 + (0.5 + gd * 0.15) * 0.4
+
+
+def knockout_win_weights(probs: dict) -> tuple[float, float]:
+    """Reparte la probabilidad de empate entre local y visitante (90'+ prórroga/penales)."""
+    h = float(probs["home_win"])
+    d = float(probs["draw"])
+    a = float(probs["away_win"])
+    if d <= 0:
+        return max(h, 0.01), max(a, 0.01)
+    ha = h + a
+    if ha <= 0:
+        return 50.0, 50.0
+    h_eff = h + d * (h / ha)
+    a_eff = a + d * (a / ha)
+    return max(h_eff, 0.01), max(a_eff, 0.01)
+
 
 def pick_outcome_from_probs(probs: dict, stage: str = "Group Stage") -> str:
-    """'home' | 'draw' | 'away' — misma lógica que la simulación del torneo."""
+    """'home' | 'draw' | 'away' — resultado más probable (determinista)."""
     h, d, a = probs["home_win"], probs["draw"], probs["away_win"]
     allow_draw = stage not in KNOCKOUT_STAGES
     if allow_draw and d >= h and d >= a:
@@ -232,6 +276,81 @@ def pick_outcome_from_probs(probs: dict, stage: str = "Group Stage") -> str:
     if h >= a:
         return "home"
     return "away"
+
+
+def sample_outcome_from_probs(
+    probs: dict, stage: str = "Group Stage", rng: random.Random | None = None
+) -> str:
+    """Muestrea resultado según probabilidades (más realista en simulación)."""
+    rng = rng or random.Random()
+    if stage in KNOCKOUT_STAGES:
+        h, a = knockout_win_weights(probs)
+        return rng.choices(["home", "away"], weights=[h, a], k=1)[0]
+    h = float(probs["home_win"])
+    d = float(probs["draw"])
+    a = float(probs["away_win"])
+    return rng.choices(["home", "draw", "away"], weights=[h, d, a], k=1)[0]
+
+
+def winner_from_score(home_team: str, away_team: str, hs: int, as_: int) -> str | None:
+    if hs > as_:
+        return home_team
+    if as_ > hs:
+        return away_team
+    return None
+
+
+def pick_knockout_winner(
+    probs: dict,
+    home_team: str,
+    away_team: str,
+    home_stats: dict | None = None,
+    away_stats: dict | None = None,
+    rng: random.Random | None = None,
+) -> str:
+    """Ganador en eliminatorias: probabilidades + historial + ventaja local."""
+    rng = rng or random.Random()
+    h, a = knockout_win_weights(probs)
+    h += (_team_strength(home_stats) - _team_strength(away_stats)) * STRENGTH_WEIGHT
+    h += KNOCKOUT_HOME_EDGE
+    h = max(h, 0.01)
+    a = max(a, 0.01)
+    return home_team if rng.random() < h / (h + a) else away_team
+
+
+def simulate_group_match(
+    probs: dict,
+    home_stats: dict | None,
+    away_stats: dict | None,
+    stage: str,
+    rng: random.Random,
+) -> tuple[int, int]:
+    outcome = sample_outcome_from_probs(probs, stage, rng)
+    return simulate_match_score(outcome, probs, home_stats, away_stats, rng=rng)
+
+
+def simulate_knockout_match(
+    home_team: str,
+    away_team: str,
+    probs: dict,
+    home_stats: dict | None,
+    away_stats: dict | None,
+    rng: random.Random,
+) -> tuple[int, int, str]:
+    """Marcador y ganador coherentes en eliminatorias."""
+    winner = pick_knockout_winner(
+        probs, home_team, away_team, home_stats, away_stats, rng
+    )
+    outcome = "home" if winner == home_team else "away"
+    for _ in range(8):
+        hs, as_ = simulate_match_score(
+            outcome, probs, home_stats, away_stats, rng=rng
+        )
+        if winner_from_score(home_team, away_team, hs, as_) == winner:
+            return hs, as_, winner
+    if winner == home_team:
+        return 1, 0, winner
+    return 0, 1, winner
 
 
 def _match_seed(home: str, away: str, stage: str) -> int:
