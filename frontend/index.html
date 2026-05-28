@@ -1533,8 +1533,14 @@
         }
 
         function estimateScoreClient(data, stage) {
-            if (data.predicted_score) return data.predicted_score;
             const probs = { home_win: data.home_win, draw: data.draw, away_win: data.away_win };
+            const h = clampPct(probs.home_win);
+            const d = clampPct(probs.draw);
+            const a = clampPct(probs.away_win);
+            if (data.predicted_result === "Empate" || (d >= h && d >= a)) {
+                return { home: 1, away: 1 };
+            }
+            if (data.predicted_score) return data.predicted_score;
             const outcome = pickOutcome(probs, stage);
             if (outcome === "home") {
                 return probs.home_win > 55 ? { home: 2, away: 0 } : { home: 2, away: 1 };
