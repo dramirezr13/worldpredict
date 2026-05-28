@@ -185,18 +185,23 @@ def pick_outcome_from_probs(probs: dict, stage: str = "Group Stage") -> str:
     return "away"
 
 
-def estimate_score_from_probs(probs: dict, stage: str = "Group Stage") -> tuple[int, int]:
-    """Marcador estimado coherente con probabilidades y fase."""
+def estimate_score_from_probs(
+    probs: dict, stage: str = "Group Stage", predicted_result: str | None = None
+) -> tuple[int, int]:
+    """Marcador estimado coherente con probabilidades, fase y resultado predicho."""
+    h, d, a = probs["home_win"], probs["draw"], probs["away_win"]
+    if predicted_result == "Empate" or (d >= h and d >= a):
+        return (1, 1)
     outcome = pick_outcome_from_probs(probs, stage)
     if outcome == "home":
-        return (2, 0) if probs["home_win"] > 55 else (2, 1)
+        return (2, 0) if h > 55 else (2, 1)
     if outcome == "away":
-        return (0, 2) if probs["away_win"] > 55 else (1, 2)
+        return (0, 2) if a > 55 else (1, 2)
     return (1, 1)
 
 
 def attach_predicted_score(result: dict, stage: str = "Group Stage") -> dict:
-    hs, as_ = estimate_score_from_probs(result, stage)
+    hs, as_ = estimate_score_from_probs(result, stage, result.get("predicted_result"))
     result["predicted_score"] = {"home": hs, "away": as_}
     result["score_display"] = f"{hs} - {as_}"
     return result
