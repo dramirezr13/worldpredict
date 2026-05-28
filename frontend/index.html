@@ -1037,6 +1037,7 @@
         }
 
         .path-item .winner { color: var(--green); font-weight: 600; }
+        .path-item .grp-tag { color: var(--text-muted); font-size: 0.75rem; font-weight: 500; }
     </style>
 </head>
 <body>
@@ -1859,10 +1860,11 @@
                 const finalScore = finalMatch
                     ? `${finalMatch.home_score} - ${finalMatch.away_score}`
                     : "";
+                const grpLbl = g => g ? ` <span class="grp-tag">(${escapeHtml(g)})</span>` : "";
                 const pathHtml = ko.map(m => `
                     <div class="path-item">
                         <span class="stage-tag">${STAGE_LABELS_SIM[m.stage] || m.stage}</span>
-                        <span>${escapeHtml(m.home)} ${m.home_score}-${m.away_score} ${escapeHtml(m.away)}</span>
+                        <span>${escapeHtml(m.home)}${grpLbl(m.home_group)} ${m.home_score}-${m.away_score} ${escapeHtml(m.away)}${grpLbl(m.away_group)}</span>
                         <span class="winner">→ ${escapeHtml(m.winner)}</span>
                     </div>`).join("");
 
