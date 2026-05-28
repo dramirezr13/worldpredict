@@ -1,251 +1,1991 @@
-import os
-import sys
-import pickle
-import traceback
-
-import numpy as np
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-from sqlalchemy import create_engine, text
-from dotenv import load_dotenv
-
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-if DATA_DIR not in sys.path:
-    sys.path.insert(0, DATA_DIR)
-
-load_dotenv()
-
-FIFA_DISPLAY_NAMES = {}
-apply_champion_boost = attach_predicted_score = encode_stage = None
-get_team_stats_combined = predict_from_stats = resolve_model_team = None
-simulate_worldcup_2026 = None
-SIM_IMPORT_ERROR = None
-
-try:
-    from worldcup_2026 import FIFA_DISPLAY_NAMES
-    from prediction_utils import (
-        apply_champion_boost,
-        attach_predicted_score,
-        encode_stage,
-        get_team_stats_combined,
-        predict_from_stats,
-        resolve_model_team,
-    )
-except Exception as exc:
-    print(f"[worldpredict] Error cargando prediction_utils: {exc}", flush=True)
-    traceback.print_exc()
-
-try:
-    from tournament_sim import simulate_worldcup_2026
-except Exception as exc:
-    SIM_IMPORT_ERROR = str(exc)
-    print(f"[worldpredict] Error cargando tournament_sim: {exc}", flush=True)
-    traceback.print_exc()
-    simulate_worldcup_2026 = None
-
-app = Flask(__name__)
-CORS(app)
-
-engine = create_engine(os.getenv("DATABASE_URL"))
-
-with open(os.path.join(BASE_DIR, "models/model.pkl"), "rb") as f:
-    model = pickle.load(f)
-with open(os.path.join(BASE_DIR, "models/label_encoder.pkl"), "rb") as f:
-    le = pickle.load(f)
-
-LABEL_CLASSES = set(le.classes_)
-
-@app.route("/health")
-def health():
-    return jsonify({
-        "status": "ok",
-        "message": "WorldPredict API corriendo!",
-        "simulation_available": simulate_worldcup_2026 is not None,
-        "simulation_error": SIM_IMPORT_ERROR,
-    })
-
-@app.route("/matches")
-def get_matches():
-    with engine.connect() as conn:
-        result = conn.execute(text("""
-            SELECT match_id, home_team, away_team, home_score,
-                   away_score, status, match_date, stage, season
-            FROM matches ORDER BY match_date DESC LIMIT 50
-        """))
-        matches = [dict(row._mapping) for row in result]
-    return jsonify(matches)
-
-@app.route("/predict", methods=["POST"])
-def predict():
-    data = request.json or {}
-    home = data.get("home_team")
-    away = data.get("away_team")
-    stage = data.get("stage", "Group Stage")
-    season = int(data.get("season", 2026))
-
-    if not home or not away:
-        return jsonify({"error": "home_team y away_team son obligatorios"}), 400
-    if home == away:
-        return jsonify({"error": "Selecciona equipos diferentes"}), 400
-    if get_team_stats_combined is None:
-        return jsonify({"error": "Motor de predicción no disponible en el servidor"}), 500
-
-    with engine.connect() as conn:
-        hs = get_team_stats_combined(conn, home, season)
-        as_ = get_team_stats_combined(conn, away, season)
-
-        home_model = resolve_model_team(home, LABEL_CLASSES)
-        away_model = resolve_model_team(away, LABEL_CLASSES)
-
-        if not home_model or not away_model:
-            result = apply_champion_boost(home, away, predict_from_stats(hs, as_))
-            result.update({
-                "home_team": home,
-                "away_team": away,
-                "home_stats": _public_stats(hs),
-                "away_stats": _public_stats(as_),
-                "note": "Predicción por historial en base de datos (equipo sin modelo ML).",
-            })
-            return jsonify(attach_predicted_score(result, stage))
-
-        home_enc = le.transform([home_model])[0]
-        away_enc = le.transform([away_model])[0]
-        stage_enc = encode_stage(stage)
-        features = np.array([[
-            home_enc, away_enc, stage_enc, season,
-            hs["win_rate"], as_["win_rate"],
-            hs["goal_diff"], as_["goal_diff"],
-            hs["wins"], as_["wins"],
-            hs["draws"], as_["draws"],
-        ]])
-        probs = model.predict_proba(features)[0]
-
-    ml_probs = apply_champion_boost(home, away, {
-        "home_win": round(float(probs[0]) * 100, 1),
-        "draw": round(float(probs[1]) * 100, 1),
-        "away_win": round(float(probs[2]) * 100, 1),
-        "predicted_result": ["Local", "Empate", "Visitante"][int(np.argmax(probs))],
-        "method": "ml_model",
-    })
-    return jsonify(attach_predicted_score({
-        "home_team": home,
-        "away_team": away,
-        "home_stats": _public_stats(hs),
-        "away_stats": _public_stats(as_),
-        **ml_probs,
-    }, stage))
-
-
-def _public_stats(s):
-    return {
-        "matches_played": s["matches_played"],
-        "wins": s["wins"],
-        "win_rate": round(s["win_rate"] * 100, 1),
-        "goal_diff": s["goal_diff"],
-    }
-
-@app.route("/history/<team>")
-def team_history(team):
-    with engine.connect() as conn:
-        result = conn.execute(text("""
-            SELECT home_team, away_team, home_score, away_score, stage, season
-            FROM matches WHERE home_team = :team OR away_team = :team
-            ORDER BY season DESC LIMIT 20
-        """), {"team": team})
-        matches = [dict(row._mapping) for row in result]
-    return jsonify(matches)
-
-@app.route("/worldcup/2026/teams")
-def worldcup_2026_teams():
-    with engine.connect() as conn:
-        rows = conn.execute(text("""
-            SELECT team_name, team_code, group_name, confederation, is_host
-            FROM worldcup_qualified_teams
-            WHERE tournament_id = 'WC-2026'
-            ORDER BY group_name, team_name
-        """)).fetchall()
-
-    if not rows:
-        return jsonify({
-            "tournament_id": "WC-2026",
-            "tournament_name": "2026 FIFA Men's World Cup",
-            "count": 0,
-            "teams": [],
-            "groups": {},
-            "message": "Ejecuta python data/load_worldcup.py para cargar los equipos.",
-        })
-
-    teams = []
-    groups = {}
-    for r in rows:
-        display = FIFA_DISPLAY_NAMES.get(r.team_name, r.team_name)
-        entry = {
-            "team_name": r.team_name,
-            "display_name": display,
-            "team_code": r.team_code,
-            "group": r.group_name,
-            "confederation": r.confederation,
-            "is_host": bool(r.is_host),
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WorldPredict 2026 | FIFA World Cup</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-deep: #050810;
+            --bg-card: rgba(12, 18, 35, 0.85);
+            --gold: #f5c518;
+            --gold-dim: #c9a012;
+            --green: #00c853;
+            --magenta: #e040fb;
+            --cyan: #00e5ff;
+            --red-host: #e53935;
+            --text: #f0f4ff;
+            --text-muted: #8b9cb8;
+            --border: rgba(245, 197, 24, 0.15);
+            --glass: rgba(255, 255, 255, 0.04);
         }
-        teams.append(entry)
-        groups.setdefault(r.group_name, []).append(display)
 
-    return jsonify({
-        "tournament_id": "WC-2026",
-        "tournament_name": "2026 FIFA Men's World Cup",
-        "count": len(teams),
-        "teams": teams,
-        "groups": groups,
-    })
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
+        body {
+            font-family: "Outfit", sans-serif;
+            background: var(--bg-deep);
+            color: var(--text);
+            min-height: 100vh;
+            line-height: 1.5;
+        }
 
-@app.route("/worldcup/2026/simulate", methods=["POST"])
-def simulate_worldcup():
-    if simulate_worldcup_2026 is None:
-        msg = "Módulo de simulación no disponible"
-        if SIM_IMPORT_ERROR:
-            msg = f"{msg}: {SIM_IMPORT_ERROR}"
-        return jsonify({"error": msg}), 500
-    if get_team_stats_combined is None:
-        return jsonify({"error": "Motor de predicción no disponible"}), 500
-    try:
-        with engine.connect() as conn:
-            result = simulate_worldcup_2026(conn, model, le, LABEL_CLASSES)
-        return jsonify(result)
-    except Exception as exc:
-        print(f"[worldpredict] simulate error: {exc}", flush=True)
-        traceback.print_exc()
-        return jsonify({"error": f"Error en simulación: {exc}"}), 500
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(ellipse 80% 50% at 20% -10%, rgba(0, 200, 83, 0.12), transparent),
+                radial-gradient(ellipse 60% 40% at 90% 10%, rgba(224, 64, 251, 0.1), transparent),
+                radial-gradient(ellipse 50% 30% at 50% 100%, rgba(245, 197, 24, 0.08), transparent),
+                linear-gradient(180deg, #0a0f1e 0%, #050810 100%);
+            pointer-events: none;
+            z-index: 0;
+        }
 
+        body::after {
+            content: "";
+            position: fixed;
+            inset: 0;
+            background-image: repeating-linear-gradient(
+                90deg,
+                transparent,
+                transparent 80px,
+                rgba(255, 255, 255, 0.015) 80px,
+                rgba(255, 255, 255, 0.015) 81px
+            );
+            pointer-events: none;
+            z-index: 0;
+        }
 
-@app.route("/stats")
-def get_stats():
-    with engine.connect() as conn:
-        goals = conn.execute(text("""
-            SELECT season,
-                   ROUND(AVG(home_score + away_score)::numeric, 2) as avg_goals,
-                   COUNT(*) as total_matches,
-                   SUM(home_score + away_score) as total_goals
-            FROM matches WHERE status = 'FINISHED'
-            GROUP BY season ORDER BY season DESC
-        """))
-        goals_data = [dict(row._mapping) for row in goals]
+        .page { position: relative; z-index: 1; }
 
-        top_teams = conn.execute(text("""
-            SELECT team, SUM(wins) as wins FROM team_stats
-            GROUP BY team ORDER BY wins DESC LIMIT 5
-        """))
-        top_data = [dict(row._mapping) for row in top_teams]
+        /* Header */
+        .hero {
+            padding: 2rem 1.5rem 3rem;
+            text-align: center;
+            border-bottom: 1px solid var(--border);
+            background: linear-gradient(180deg, rgba(245, 197, 24, 0.06) 0%, transparent 100%);
+        }
 
-        totals = conn.execute(text("""
-            SELECT COUNT(*) as total_matches,
-                   SUM(home_score + away_score) as total_goals
-            FROM matches WHERE status = 'FINISHED'
-        """))
-        totals_data = dict(totals.fetchone()._mapping)
+        .hero-badges {
+            display: flex;
+            justify-content: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin-bottom: 1rem;
+        }
 
-    return jsonify({"by_season": goals_data, "top_teams": top_data, "totals": totals_data})
+        .host-pill {
+            font-size: 0.7rem;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            padding: 0.35rem 0.75rem;
+            border-radius: 999px;
+            border: 1px solid;
+        }
 
-if __name__ == "__main__":
-    app.run(debug=True)
+        .host-pill.ca { color: #ff5252; border-color: rgba(255, 82, 82, 0.4); background: rgba(255, 82, 82, 0.08); }
+        .host-pill.mx { color: var(--green); border-color: rgba(0, 200, 83, 0.4); background: rgba(0, 200, 83, 0.08); }
+        .host-pill.us { color: #42a5f5; border-color: rgba(66, 165, 245, 0.4); background: rgba(66, 165, 245, 0.08); }
+
+        .hero h1 {
+            font-family: "Bebas Neue", sans-serif;
+            font-size: clamp(2.8rem, 10vw, 4.5rem);
+            letter-spacing: 0.06em;
+            line-height: 1;
+            background: linear-gradient(135deg, var(--gold) 0%, #fff 40%, var(--cyan) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .hero-sub {
+            margin-top: 0.5rem;
+            color: var(--text-muted);
+            font-size: 1rem;
+            font-weight: 300;
+        }
+
+        .hero-year {
+            display: inline-block;
+            margin-top: 1rem;
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 1.5rem;
+            color: var(--gold);
+            letter-spacing: 0.2em;
+        }
+
+        .container {
+            max-width: 960px;
+            margin: 0 auto;
+            padding: 2rem 1.25rem 4rem;
+        }
+
+        .card {
+            background: var(--bg-card);
+            backdrop-filter: blur(12px);
+            border-radius: 16px;
+            padding: 1.75rem;
+            margin-bottom: 1.5rem;
+            border: 1px solid var(--border);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .card.featured {
+            border-color: rgba(245, 197, 24, 0.35);
+            box-shadow: 0 0 40px rgba(245, 197, 24, 0.08);
+            overflow: visible;
+        }
+
+        .card-title {
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+            margin-bottom: 1.25rem;
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 1.35rem;
+            letter-spacing: 0.08em;
+            color: var(--gold);
+        }
+
+        .card-title .icon { font-size: 1.2rem; }
+
+        .badge {
+            font-family: "Outfit", sans-serif;
+            font-size: 0.7rem;
+            font-weight: 600;
+            background: linear-gradient(135deg, var(--gold), var(--gold-dim));
+            color: #0a0f1e;
+            padding: 0.2rem 0.55rem;
+            border-radius: 6px;
+            letter-spacing: 0.05em;
+        }
+
+        /* Forms */
+        .form-row {
+            display: flex;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            overflow: visible;
+            position: relative;
+            z-index: 20;
+        }
+
+        .form-row:has(.custom-select.open) {
+            z-index: 200;
+        }
+
+        /* Select nativo (respaldo / accesibilidad) */
+        select.native-select-hidden {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            border: 0;
+        }
+
+        .custom-select {
+            flex: 1;
+            min-width: 160px;
+            position: relative;
+        }
+
+        .custom-select-trigger {
+            width: 100%;
+            text-align: left;
+            padding: 0.85rem 2.5rem 0.85rem 1rem;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: #0d1224;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            position: relative;
+        }
+
+        .custom-select-trigger::after {
+            content: "";
+            position: absolute;
+            right: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            border-left: 5px solid transparent;
+            border-right: 5px solid transparent;
+            border-top: 6px solid var(--gold);
+        }
+
+        .custom-select-trigger:hover,
+        .custom-select.open .custom-select-trigger {
+            border-color: var(--gold);
+            box-shadow: 0 0 0 3px rgba(245, 197, 24, 0.15);
+        }
+
+        .custom-select-trigger.placeholder {
+            color: var(--text-muted);
+        }
+
+        .custom-select-trigger:not(.placeholder) {
+            display: flex;
+            align-items: center;
+        }
+
+        .team-line {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            min-width: 0;
+        }
+
+        .team-line .team-label {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .team-flag {
+            flex-shrink: 0;
+            line-height: 1;
+            font-size: 1.15em;
+        }
+
+        .team-flag--img {
+            width: 22px;
+            height: 16px;
+            object-fit: cover;
+            border-radius: 2px;
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+        }
+
+        .wc2026-team .team-line {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .wc2026-team .code {
+            flex-shrink: 0;
+        }
+
+        .custom-select-menu {
+            display: none;
+            position: fixed;
+            z-index: 9999;
+            background: #0d1224;
+            border: 1px solid rgba(245, 197, 24, 0.55);
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.85);
+            overflow: hidden;
+            min-width: 200px;
+        }
+
+        .custom-select-menu.open {
+            display: flex;
+            flex-direction: column;
+            animation: menuIn 0.15s ease;
+        }
+
+        @keyframes menuIn {
+            from { opacity: 0; transform: translateY(-6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .custom-select-search {
+            width: 100%;
+            padding: 0.65rem 0.85rem;
+            border: none;
+            border-bottom: 1px solid var(--border);
+            background: #080c18;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 0.85rem;
+        }
+
+        .custom-select-search:focus {
+            outline: none;
+            background: #0a1020;
+        }
+
+        .custom-select-search::placeholder {
+            color: var(--text-muted);
+        }
+
+        .custom-select-options {
+            list-style: none;
+            max-height: 280px;
+            min-height: 48px;
+            overflow-y: auto;
+            padding: 0.35rem 0;
+            flex: 1;
+        }
+
+        .custom-select-options::-webkit-scrollbar { width: 8px; }
+        .custom-select-options::-webkit-scrollbar-thumb {
+            background: var(--gold-dim);
+            border-radius: 4px;
+        }
+
+        .custom-select-option {
+            display: flex;
+            align-items: center;
+            padding: 0.6rem 1rem;
+            font-size: 0.9rem;
+            color: #e8eeff;
+            cursor: pointer;
+            transition: background 0.12s, color 0.12s;
+        }
+
+        .custom-select-option:hover,
+        .custom-select-option.focused {
+            background: rgba(245, 197, 24, 0.18);
+            color: var(--gold);
+        }
+
+        .custom-select-option.selected {
+            background: rgba(0, 229, 255, 0.12);
+            color: var(--cyan);
+            font-weight: 600;
+        }
+
+        .custom-select-option.hidden {
+            display: none;
+        }
+
+        .custom-select-empty {
+            padding: 1rem;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+
+        .btn-predict {
+            padding: 0.85rem 2rem;
+            border: none;
+            border-radius: 10px;
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 1.1rem;
+            letter-spacing: 0.12em;
+            cursor: pointer;
+            background: linear-gradient(135deg, var(--gold) 0%, #ffab00 100%);
+            color: #0a0f1e;
+            transition: transform 0.15s, box-shadow 0.2s;
+            white-space: nowrap;
+        }
+
+        .btn-predict:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(245, 197, 24, 0.35);
+        }
+
+        .btn-predict:active { transform: translateY(0); }
+
+        .btn-ghost {
+            padding: 0.5rem 1rem;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: color 0.2s, border-color 0.2s;
+        }
+
+        .btn-ghost:hover {
+            color: var(--red-host);
+            border-color: rgba(229, 57, 53, 0.5);
+        }
+
+        /* Prediction result */
+        .result { margin-top: 1.5rem; display: none; animation: fadeIn 0.4s ease; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .matchup {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 1rem;
+            margin-bottom: 1.5rem;
+            padding: 1rem;
+            background: var(--glass);
+            border-radius: 12px;
+        }
+
+        .team-block { text-align: center; flex: 1; }
+        .team-block .name { font-weight: 700; font-size: 1.1rem; }
+        .team-block .role { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; margin-top: 0.25rem; }
+
+        .vs-badge {
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 1.8rem;
+            color: var(--gold);
+            text-shadow: 0 0 20px rgba(245, 197, 24, 0.4);
+        }
+
+        .bars { display: flex; flex-direction: column; gap: 0.65rem; }
+        .bar-row { display: flex; align-items: center; gap: 0.75rem; }
+        .bar-label {
+            width: 88px;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            font-weight: 500;
+            line-height: 1.15;
+            word-break: break-word;
+        }
+        .bar-bg {
+            flex: 1;
+            height: 32px;
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .bar-fill {
+            height: 100%;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            padding-left: 10px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            transition: width 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+            min-width: 2.5rem;
+        }
+        .bar-home { background: linear-gradient(90deg, #1565c0, #42a5f5); }
+        .bar-draw { background: linear-gradient(90deg, #5c6bc0, #9fa8da); }
+        .bar-away { background: linear-gradient(90deg, #c62828, #ef5350); }
+
+        .predicted-outcome {
+            text-align: center;
+            margin-top: 1.25rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .predicted-outcome span {
+            display: inline-block;
+            background: linear-gradient(135deg, rgba(245, 197, 24, 0.2), rgba(0, 229, 255, 0.1));
+            border: 1px solid var(--gold);
+            color: var(--gold);
+            padding: 0.5rem 1.25rem;
+            border-radius: 999px;
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+
+        /* Explainability charts */
+        .explain-box {
+            margin-top: 1.25rem;
+            padding: 1.25rem;
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.22);
+            border: 1px solid var(--border);
+        }
+
+        .explain-head { margin-bottom: 1rem; }
+
+        .explain-title {
+            font-family: "Bebas Neue", sans-serif;
+            letter-spacing: 0.1em;
+            color: var(--cyan);
+            font-size: 1.15rem;
+        }
+
+        .explain-sub {
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            margin-top: 0.25rem;
+        }
+
+        .chart-panel {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 1.25rem;
+        }
+
+        @media (min-width: 640px) {
+            .chart-panel.match-chart {
+                grid-template-columns: auto 1fr;
+                align-items: center;
+            }
+        }
+
+        .scoreboard {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            padding: 1rem 1.25rem;
+            border-radius: 14px;
+            background: linear-gradient(135deg, rgba(245, 197, 24, 0.12), rgba(0, 229, 255, 0.06));
+            border: 1px solid rgba(245, 197, 24, 0.35);
+        }
+
+        .scoreboard .team-name {
+            flex: 1;
+            font-weight: 700;
+            font-size: 0.95rem;
+            text-align: center;
+            line-height: 1.2;
+        }
+
+        .scoreboard .team-name.home { text-align: right; }
+        .scoreboard .team-name.away { text-align: left; }
+
+        .scoreboard .score-digits {
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 2.75rem;
+            letter-spacing: 0.08em;
+            color: var(--gold);
+            line-height: 1;
+            min-width: 5rem;
+            text-align: center;
+        }
+
+        .scoreboard .score-digits span.sep {
+            color: var(--text-muted);
+            margin: 0 0.15em;
+            font-size: 2rem;
+        }
+
+        .scoreboard-hint {
+            text-align: center;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 0.5rem;
+        }
+
+        .donut-wrap {
+            position: relative;
+            width: 168px;
+            height: 168px;
+            margin: 0 auto;
+        }
+
+        .donut-ring {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            box-shadow: 0 0 24px rgba(0, 229, 255, 0.12);
+        }
+
+        .donut-hole {
+            position: absolute;
+            inset: 22%;
+            border-radius: 50%;
+            background: #0a1020;
+            border: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 0.5rem;
+        }
+
+        .donut-hole .pct-main {
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 1.6rem;
+            color: var(--gold);
+            line-height: 1;
+        }
+
+        .donut-hole .pct-label {
+            font-size: 0.65rem;
+            color: var(--text-muted);
+            letter-spacing: 0.02em;
+            max-width: 5.5rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .bar-chart {
+            display: flex;
+            align-items: flex-end;
+            justify-content: center;
+            gap: 1.25rem;
+            height: 140px;
+            padding: 0.5rem 0 0;
+        }
+
+        .bar-col {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.4rem;
+            flex: 1;
+            max-width: 72px;
+        }
+
+        .bar-col .pct {
+            font-size: 0.8rem;
+            font-weight: 700;
+            color: var(--text);
+        }
+
+        .bar-col .pillar-wrap {
+            width: 100%;
+            height: 100px;
+            display: flex;
+            align-items: flex-end;
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 8px 8px 4px 4px;
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            overflow: hidden;
+        }
+
+        .bar-col .pillar {
+            width: 100%;
+            border-radius: 6px 6px 0 0;
+            transition: height 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+            min-height: 4px;
+        }
+
+        .bar-col .pillar.home { background: linear-gradient(180deg, #42a5f5, #1565c0); }
+        .bar-col .pillar.draw { background: linear-gradient(180deg, #9fa8da, #5c6bc0); }
+        .bar-col .pillar.away { background: linear-gradient(180deg, #ef5350, #c62828); }
+
+        .bar-col .lbl {
+            font-size: 0.68rem;
+            color: var(--text-muted);
+            letter-spacing: 0.02em;
+            text-align: center;
+            max-width: 76px;
+            line-height: 1.15;
+            word-break: break-word;
+        }
+
+        .form-field {
+            flex: 1;
+            min-width: 160px;
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+        }
+
+        .form-field label {
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+
+        .form-field .custom-select {
+            min-width: 0;
+        }
+
+        .chart-legend {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 0.75rem 1.25rem;
+            margin-top: 0.75rem;
+            font-size: 0.78rem;
+            color: var(--text-muted);
+        }
+
+        .chart-legend span::before {
+            content: "";
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            margin-right: 0.35rem;
+            vertical-align: middle;
+        }
+
+        .chart-legend .lg-home::before { background: #42a5f5; }
+        .chart-legend .lg-draw::before { background: #9fa8da; }
+        .chart-legend .lg-away::before { background: #ef5350; }
+
+        .prob-mini {
+            display: grid;
+            gap: 0.5rem;
+            padding: 0.75rem;
+            border-radius: 10px;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .prob-mini .meta {
+            display: flex;
+            justify-content: space-between;
+            gap: 0.75rem;
+            font-size: 0.82rem;
+            color: var(--text-muted);
+            flex-wrap: wrap;
+        }
+
+        .prob-mini .meta strong { color: var(--text); }
+
+        .prob-mini .score-tag {
+            font-family: "Bebas Neue", sans-serif;
+            color: var(--gold);
+            letter-spacing: 0.06em;
+            font-size: 1rem;
+        }
+
+        .prob-mini .mini-bars {
+            display: flex;
+            align-items: flex-end;
+            gap: 4px;
+            height: 48px;
+        }
+
+        .prob-mini .mini-bar {
+            flex: 1;
+            border-radius: 4px 4px 0 0;
+            min-height: 3px;
+        }
+
+        details.explain-details summary {
+            cursor: pointer;
+            user-select: none;
+            color: var(--gold);
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        details.explain-details[open] summary { margin-bottom: 0.75rem; }
+
+        /* Prediction history */
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        .history-count {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+
+        .history-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.65rem;
+            max-height: 420px;
+            overflow-y: auto;
+            padding-right: 4px;
+        }
+
+        .history-list::-webkit-scrollbar { width: 6px; }
+        .history-list::-webkit-scrollbar-thumb { background: var(--gold-dim); border-radius: 3px; }
+
+        .history-item {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 0.5rem 1rem;
+            align-items: center;
+            padding: 1rem 1.1rem;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 12px;
+            border-left: 3px solid var(--gold);
+            transition: background 0.2s;
+        }
+
+        .history-item:hover { background: rgba(245, 197, 24, 0.06); }
+
+        .history-match {
+            font-weight: 600;
+            font-size: 0.95rem;
+        }
+
+        .history-match .prob {
+            color: var(--cyan);
+            font-weight: 700;
+        }
+
+        .history-meta {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            grid-column: 1 / -1;
+        }
+
+        .history-result {
+            text-align: right;
+        }
+
+        .result-pill {
+            display: inline-block;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.35rem 0.7rem;
+            border-radius: 6px;
+            background: rgba(0, 200, 83, 0.15);
+            color: var(--green);
+            border: 1px solid rgba(0, 200, 83, 0.3);
+        }
+
+        .empty-history {
+            text-align: center;
+            padding: 2.5rem 1rem;
+            color: var(--text-muted);
+        }
+
+        .empty-history .big { font-size: 2.5rem; margin-bottom: 0.5rem; opacity: 0.5; }
+
+        /* Stats */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+        }
+
+        @media (max-width: 600px) {
+            .stats-grid { grid-template-columns: 1fr; }
+        }
+
+        .stat-box {
+            text-align: center;
+            padding: 1.25rem;
+            background: var(--glass);
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .stat-number {
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 2.2rem;
+            color: var(--gold);
+            line-height: 1;
+        }
+
+        .stat-label { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.35rem; }
+
+        .top-teams, .season-grid { display: flex; flex-direction: column; gap: 0.5rem; }
+
+        .season-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.5rem;
+        }
+
+        @media (max-width: 500px) { .season-grid { grid-template-columns: 1fr; } }
+
+        .list-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 1rem;
+            background: var(--glass);
+            border-radius: 10px;
+            font-size: 0.9rem;
+        }
+
+        .list-row strong { color: var(--gold); }
+
+        /* WC 2026 groups */
+        .wc2026-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 0.75rem;
+        }
+
+        .wc2026-group {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 12px;
+            padding: 1rem;
+            border: 1px solid var(--border);
+        }
+
+        .wc2026-group h3 {
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 1.1rem;
+            letter-spacing: 0.1em;
+            color: var(--cyan);
+            margin-bottom: 0.65rem;
+            padding-bottom: 0.35rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .wc2026-team {
+            font-size: 0.82rem;
+            padding: 0.3rem 0;
+            display: flex;
+            justify-content: space-between;
+            gap: 0.5rem;
+        }
+
+        .wc2026-team .code { color: var(--text-muted); font-size: 0.7rem; }
+        .wc2026-team.host { color: var(--gold); }
+
+        .loading {
+            text-align: center;
+            color: var(--text-muted);
+            padding: 1.5rem;
+        }
+
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .simulate-wrap {
+            margin-top: 1.25rem;
+            padding-top: 1.25rem;
+            border-top: 1px solid var(--border);
+        }
+
+        .btn-simulate {
+            width: 100%;
+            padding: 1rem 1.5rem;
+            border: 2px solid var(--gold);
+            border-radius: 12px;
+            background: linear-gradient(135deg, rgba(245, 197, 24, 0.15), rgba(0, 229, 255, 0.08));
+            color: var(--gold);
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 1.4rem;
+            letter-spacing: 0.1em;
+            cursor: pointer;
+            transition: transform 0.15s, box-shadow 0.2s, background 0.2s;
+        }
+
+        .btn-simulate:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 28px rgba(245, 197, 24, 0.25);
+            background: linear-gradient(135deg, rgba(245, 197, 24, 0.28), rgba(0, 229, 255, 0.12));
+        }
+
+        .btn-simulate:disabled {
+            opacity: 0.6;
+            cursor: wait;
+        }
+
+        .sim-result { display: none; margin-top: 1.5rem; animation: fadeIn 0.5s ease; }
+
+        .champion-box {
+            text-align: center;
+            padding: 1.75rem;
+            margin-bottom: 1.25rem;
+            border-radius: 16px;
+            background: linear-gradient(135deg, rgba(245, 197, 24, 0.12), rgba(0, 200, 83, 0.08));
+            border: 2px solid var(--gold);
+        }
+
+        .champion-box .trophy { font-size: 3rem; line-height: 1; }
+        .champion-box .label { font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.15em; margin-top: 0.5rem; }
+        .champion-box .name {
+            font-family: "Bebas Neue", sans-serif;
+            font-size: 2.5rem;
+            color: var(--gold);
+            letter-spacing: 0.06em;
+            margin-top: 0.25rem;
+        }
+
+        .champion-box .sub { color: var(--text-muted); font-size: 0.9rem; margin-top: 0.5rem; }
+
+        .sim-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        @media (max-width: 500px) { .sim-stats { grid-template-columns: 1fr; } }
+
+        .sim-stat {
+            text-align: center;
+            padding: 0.75rem;
+            background: var(--glass);
+            border-radius: 8px;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+
+        .sim-stat strong { display: block; color: var(--cyan); font-size: 1.1rem; }
+
+        .knockout-path { display: flex; flex-direction: column; gap: 0.4rem; max-height: 280px; overflow-y: auto; }
+
+        .path-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.55rem 0.85rem;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 8px;
+            font-size: 0.82rem;
+        }
+
+        .path-item .stage-tag {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            color: var(--gold);
+            letter-spacing: 0.08em;
+            min-width: 72px;
+        }
+
+        .path-item .winner { color: var(--green); font-weight: 600; }
+        .path-item .grp-tag { color: var(--text-muted); font-size: 0.75rem; font-weight: 500; }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <header class="hero">
+            <div class="hero-badges">
+                <span class="host-pill ca">Canadá</span>
+                <span class="host-pill mx">México</span>
+                <span class="host-pill us">Estados Unidos</span>
+            </div>
+            <h1>WORLDPREDICT</h1>
+            <p class="hero-sub">Predicciones inteligentes para la Copa Mundial de la FIFA</p>
+            <span class="hero-year">2026</span>
+        </header>
+
+        <div class="container">
+
+            <!-- Predictor -->
+            <section class="card featured">
+                <h2 class="card-title"><span class="icon">⚽</span> Predecir partido</h2>
+                <div class="form-row">
+                    <div class="form-field">
+                        <label for="home">Equipo 1</label>
+                        <select id="home">
+                            <option value="">Seleccionar equipo...</option>
+                        </select>
+                    </div>
+                    <div class="form-field">
+                        <label for="away">Equipo 2</label>
+                        <select id="away">
+                            <option value="">Seleccionar equipo...</option>
+                        </select>
+                    </div>
+                    <select id="stage">
+                        <option value="Group Stage">Fase de grupos</option>
+                        <option value="Round of 16">Octavos de final</option>
+                        <option value="Quarter-finals">Cuartos de final</option>
+                        <option value="Semi-finals">Semifinal</option>
+                        <option value="Final">Final</option>
+                    </select>
+                    <button type="button" class="btn-predict" onclick="predict()">PREDECIR</button>
+                </div>
+                <div class="result" id="result">
+                    <div class="matchup">
+                        <div class="team-block">
+                            <div class="name" id="homeName"></div>
+                        </div>
+                        <div class="vs-badge">VS</div>
+                        <div class="team-block">
+                            <div class="name" id="awayName"></div>
+                        </div>
+                    </div>
+                    <div class="bars">
+                        <div class="bar-row">
+                            <div class="bar-label" id="barLabelHome">—</div>
+                            <div class="bar-bg"><div class="bar-fill bar-home" id="barHome"></div></div>
+                        </div>
+                        <div class="bar-row">
+                            <div class="bar-label">Empate</div>
+                            <div class="bar-bg"><div class="bar-fill bar-draw" id="barDraw"></div></div>
+                        </div>
+                        <div class="bar-row">
+                            <div class="bar-label" id="barLabelAway">—</div>
+                            <div class="bar-bg"><div class="bar-fill bar-away" id="barAway"></div></div>
+                        </div>
+                    </div>
+                    <div class="predicted-outcome">
+                        Resultado: <span id="predicted"></span>
+                        <span id="predictedScoreBadge" style="display:none;margin-left:0.5rem"></span>
+                    </div>
+
+                    <div class="explain-box" id="matchExplain" style="display:none">
+                        <div class="explain-head">
+                            <div class="explain-title">Análisis visual</div>
+                            <div class="explain-sub" id="matchExplainMeta">Fuente: -</div>
+                        </div>
+                        <div id="matchExplainChart"></div>
+                    </div>
+                </div>
+
+                <div class="simulate-wrap">
+                    <button type="button" class="btn-simulate" id="btnSimulate" onclick="simulateTournament()">
+                        🏆 SIMULAR MUNDIAL COMPLETO 2026
+                    </button>
+                    <p style="text-align:center;color:var(--text-muted);font-size:0.8rem;margin-top:0.5rem">
+                        72 partidos · 12 grupos · fase eliminatoria hasta el campeón
+                    </p>
+                    <div class="sim-result" id="simResult"></div>
+                </div>
+            </section>
+
+            <!-- Historial de predicciones -->
+            <section class="card">
+                <div class="history-header">
+                    <h2 class="card-title" style="margin-bottom:0">
+                        <span class="icon">📜</span> Historial de predicciones
+                    </h2>
+                    <div style="display:flex;align-items:center;gap:0.75rem">
+                        <span class="history-count" id="historyCount">0 predicciones</span>
+                        <button type="button" class="btn-ghost" onclick="clearHistory()">Limpiar</button>
+                    </div>
+                </div>
+                <div class="history-list" id="predictionHistory">
+                    <div class="empty-history">
+                        <div class="big">🏟️</div>
+                        <p>Aún no hay predicciones.</p>
+                        <p style="font-size:0.85rem;margin-top:0.35rem">Usa el predictor arriba y tus resultados aparecerán aquí.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Equipos 2026 -->
+            <section class="card">
+                <h2 class="card-title">
+                    <span class="icon">🌎</span> Clasificados 2026
+                    <span class="badge" id="wc2026Count">48</span>
+                </h2>
+                <div class="wc2026-grid" id="wc2026Teams">
+                    <div class="loading">Cargando equipos...</div>
+                </div>
+            </section>
+
+            <!-- Estadísticas -->
+            <section class="card">
+                <h2 class="card-title"><span class="icon">📊</span> Datos históricos FIFA</h2>
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <div class="stat-number" id="totalMatches">-</div>
+                        <div class="stat-label">Partidos en BD</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-number" id="totalGoals">-</div>
+                        <div class="stat-label">Goles totales</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-number" id="avgGoals">-</div>
+                        <div class="stat-label">Promedio / partido</div>
+                    </div>
+                </div>
+                <h2 class="card-title" style="margin-top:1rem"><span class="icon">🏆</span> Más victorias</h2>
+                <div class="top-teams" id="topTeams">
+                    <div class="loading">Cargando...</div>
+                </div>
+            </section>
+
+            <section class="card">
+                <h2 class="card-title"><span class="icon">📅</span> Rendimiento por mundial</h2>
+                <div class="season-grid" id="seasonGrid">
+                    <div class="loading">Cargando...</div>
+                </div>
+            </section>
+        </div>
+
+        <footer>
+            WorldPredict 2026 · Canadá · México · Estados Unidos · Jun 11 – Jul 19, 2026
+        </footer>
+    </div>
+
+    <script>
+        const API = "https://worldpredict.onrender.com";
+        const HISTORY_KEY = "worldpredict_2026_history";
+        const MAX_HISTORY = 50;
+
+        const FALLBACK_TEAMS = [
+            "Algeria", "Argentina", "Australia", "Austria", "Belgium",
+            "Bosnia and Herzegovina", "Brazil", "Canada", "Cape Verde", "Colombia",
+            "Costa Rica", "Croatia", "Curaçao", "Czech Republic", "DR Congo",
+            "Ecuador", "Egypt", "England", "France", "Germany", "Ghana", "Haiti",
+            "Iran", "Iraq", "Ivory Coast", "Japan", "Jordan", "Mexico", "Morocco",
+            "Netherlands", "New Zealand", "Norway", "Panama", "Paraguay", "Portugal",
+            "Qatar", "Saudi Arabia", "Scotland", "Senegal", "South Africa",
+            "South Korea", "Spain", "Sweden", "Switzerland", "Tunisia", "Turkey",
+            "United States", "Uruguay", "Uzbekistan"
+        ].sort();
+
+        /** Código ISO-3 (BD) → código flagcdn (ISO-2 o gb-eng, gb-sct) */
+        const ISO3_TO_ISO2 = {
+            DZA: "dz", ARG: "ar", AUS: "au", AUT: "at", BEL: "be", BIH: "ba",
+            BRA: "br", CAN: "ca", CPV: "cv", COL: "co", CRI: "cr", HRV: "hr",
+            CUW: "cw", CZE: "cz", COD: "cd", ECU: "ec", EGY: "eg", ENG: "gb-eng",
+            FRA: "fr", DEU: "de", GHA: "gh", HAI: "ht", IRN: "ir", IRQ: "iq",
+            CIV: "ci", JPN: "jp", JOR: "jo", MEX: "mx", MAR: "ma", NLD: "nl",
+            NZL: "nz", NOR: "no", PAN: "pa", PAR: "py", PRT: "pt", QAT: "qa",
+            SAU: "sa", SCO: "gb-sct", SEN: "sn", ZAF: "za", KOR: "kr", ESP: "es",
+            SWE: "se", CHE: "ch", TUN: "tn", TUR: "tr", USA: "us", URY: "uy",
+            UZB: "uz",
+        };
+
+        /** Nombre interno → código ISO-3 (Mundial 2026) */
+        const STATIC_TEAM_CODES = {
+            Mexico: "MEX", "South Africa": "ZAF", "South Korea": "KOR",
+            "Czech Republic": "CZE", Canada: "CAN", "Bosnia and Herzegovina": "BIH",
+            Qatar: "QAT", Switzerland: "CHE", Brazil: "BRA", Morocco: "MAR",
+            Scotland: "SCO", Haiti: "HAI", "United States": "USA", Australia: "AUS",
+            Paraguay: "PAR", Turkey: "TUR", Germany: "DEU", Ecuador: "ECU",
+            "Ivory Coast": "CIV", "Curaçao": "CUW", Netherlands: "NLD", Japan: "JPN",
+            Tunisia: "TUN", Sweden: "SWE", Belgium: "BEL", Iran: "IRN", Egypt: "EGY",
+            "New Zealand": "NZL", Spain: "ESP", Uruguay: "URY", "Saudi Arabia": "SAU",
+            "Cape Verde": "CPV", France: "FRA", Norway: "NOR", Senegal: "SEN",
+            Iraq: "IRQ", Argentina: "ARG", Austria: "AUT", Algeria: "DZA", Jordan: "JOR",
+            Portugal: "PRT", Colombia: "COL", Uzbekistan: "UZB", "DR Congo": "COD",
+            England: "ENG", Croatia: "HRV", Ghana: "GHA", Panama: "PAN",
+        };
+
+        const teamCodeByName = { ...STATIC_TEAM_CODES };
+
+        const STAGE_LABELS = {
+            "Group Stage": "Fase de grupos",
+            "Round of 16": "Octavos",
+            "Quarter-finals": "Cuartos",
+            "Semi-finals": "Semifinal",
+            "Final": "Final",
+            "Third place": "Tercer puesto"
+        };
+
+        function normalizeSearch(s) {
+            return s.trim().toLowerCase()
+                .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        }
+
+        function getTeamCode(teamName) {
+            if (!teamName) return "";
+            return teamCodeByName[teamName] || "";
+        }
+
+        function teamFlagMarkup(code3) {
+            if (!code3) return '<span class="team-flag" aria-hidden="true">⚽</span>';
+            const iso = ISO3_TO_ISO2[code3.toUpperCase()];
+            if (!iso) return '<span class="team-flag" aria-hidden="true">⚽</span>';
+            const src = `https://flagcdn.com/24x18/${iso}.png`;
+            const src2x = `https://flagcdn.com/48x36/${iso}.png`;
+            return `<img class="team-flag team-flag--img" src="${src}" srcset="${src2x} 2x" alt="" width="24" height="18" loading="lazy" decoding="async">`;
+        }
+
+        function renderTeamLine(teamName, code3) {
+            const code = code3 || getTeamCode(teamName);
+            return `<span class="team-line">${teamFlagMarkup(code)}<span class="team-label">${escapeHtml(teamName)}</span></span>`;
+        }
+
+        function positionMenu(trigger, menu) {
+            const rect = trigger.getBoundingClientRect();
+            menu.style.top = `${rect.bottom + 6}px`;
+            menu.style.left = `${rect.left}px`;
+            menu.style.width = `${Math.max(rect.width, 220)}px`;
+        }
+
+        function closeAllSelectMenus() {
+            document.querySelectorAll(".custom-select.open").forEach(el => {
+                el.classList.remove("open");
+                el._menu?.classList.remove("open");
+            });
+        }
+
+        function syncOpenSelectMenus(e) {
+            document.querySelectorAll(".custom-select.open").forEach(wrap => {
+                if (!wrap._trigger || !wrap._menu?.classList.contains("open")) return;
+                if (e?.type === "scroll" && e.target?.closest?.(".custom-select-menu")) return;
+                const rect = wrap._trigger.getBoundingClientRect();
+                if (rect.bottom < 0 || rect.top > window.innerHeight) {
+                    wrap.classList.remove("open");
+                    wrap._menu.classList.remove("open");
+                    return;
+                }
+                positionMenu(wrap._trigger, wrap._menu);
+            });
+        }
+
+        if (!window._customSelectScrollBound) {
+            window._customSelectScrollBound = true;
+            window.addEventListener("scroll", syncOpenSelectMenus, { capture: true, passive: true });
+            window.addEventListener("resize", syncOpenSelectMenus, { passive: true });
+        }
+
+        function enhanceSelect(selectEl) {
+            if (selectEl.dataset.enhanced) return;
+            selectEl.dataset.enhanced = "1";
+
+            const wrap = document.createElement("div");
+            wrap.className = "custom-select";
+            selectEl.parentNode.insertBefore(wrap, selectEl);
+            wrap.appendChild(selectEl);
+            selectEl.classList.add("native-select-hidden");
+
+            const trigger = document.createElement("button");
+            trigger.type = "button";
+            trigger.className = "custom-select-trigger placeholder";
+            trigger.textContent = selectEl.options[0]?.textContent || "Seleccionar...";
+
+            const menu = document.createElement("div");
+            menu.className = "custom-select-menu";
+            document.body.appendChild(menu);
+
+            const searchable = selectEl.id === "home" || selectEl.id === "away";
+            let search = null;
+            if (searchable) {
+                search = document.createElement("input");
+                search.type = "text";
+                search.className = "custom-select-search";
+                search.placeholder = "Buscar equipo...";
+                search.autocomplete = "off";
+                menu.appendChild(search);
+            }
+
+            const list = document.createElement("ul");
+            list.className = "custom-select-options";
+            menu.appendChild(list);
+
+            wrap.appendChild(trigger);
+            wrap._menu = menu;
+            wrap._trigger = trigger;
+
+            function stopInside(e) { e.stopPropagation(); }
+
+            function syncTrigger() {
+                const opt = selectEl.options[selectEl.selectedIndex];
+                if (!opt || !opt.value) {
+                    trigger.textContent = selectEl.options[0]?.textContent || "Seleccionar...";
+                    trigger.classList.add("placeholder");
+                } else {
+                    trigger.innerHTML = renderTeamLine(opt.value, opt.dataset.teamCode);
+                    trigger.classList.remove("placeholder");
+                }
+            }
+
+            function buildOptions(filter = "") {
+                const q = normalizeSearch(filter);
+                list.innerHTML = "";
+                let visible = 0;
+                [...selectEl.options].forEach((opt, i) => {
+                    if (i === 0 && !opt.value) return;
+                    const label = opt.value || opt.textContent;
+                    if (q && !normalizeSearch(label).includes(q)) return;
+                    visible++;
+                    const li = document.createElement("li");
+                    li.className = "custom-select-option";
+                    if (opt.value === selectEl.value) li.classList.add("selected");
+                    li.innerHTML = renderTeamLine(label, opt.dataset.teamCode);
+                    li.dataset.value = opt.value;
+                    li.addEventListener("pointerdown", (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (selectEl.value !== opt.value) {
+                            selectEl.value = opt.value;
+                            // Mantener compatibilidad con listeners del <select>
+                            selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+                        } else {
+                            syncTrigger();
+                        }
+                        wrap.classList.remove("open");
+                        menu.classList.remove("open");
+                    });
+                    list.appendChild(li);
+                });
+                if (!visible) {
+                    const empty = document.createElement("li");
+                    empty.className = "custom-select-empty";
+                    empty.textContent = q ? `Sin resultados para "${filter.trim()}"` : "No hay equipos cargados";
+                    list.appendChild(empty);
+                }
+            }
+
+            function openMenu() {
+                closeAllSelectMenus();
+                wrap.classList.add("open");
+                menu.classList.add("open");
+                positionMenu(trigger, menu);
+                buildOptions(search ? search.value : "");
+                if (search) {
+                    setTimeout(() => search.focus(), 0);
+                }
+            }
+
+            trigger.addEventListener("click", (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                if (wrap.classList.contains("open")) {
+                    wrap.classList.remove("open");
+                    menu.classList.remove("open");
+                } else {
+                    openMenu();
+                }
+            });
+
+            if (search) {
+                search.addEventListener("input", () => buildOptions(search.value));
+                search.addEventListener("pointerdown", stopInside);
+                search.addEventListener("click", stopInside);
+            }
+            menu.addEventListener("pointerdown", stopInside);
+
+            selectEl.addEventListener("change", syncTrigger);
+            wrap._rebuildOptions = () => {
+                buildOptions(search?.value || "");
+                syncTrigger();
+            };
+            buildOptions();
+            syncTrigger();
+        }
+
+        document.addEventListener("pointerdown", (e) => {
+            if (e.target.closest(".custom-select")) return;
+            if (e.target.closest(".custom-select-menu")) return;
+            closeAllSelectMenus();
+        });
+
+        function getHistory() {
+            try {
+                return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
+            } catch {
+                return [];
+            }
+        }
+
+        function saveToHistory(entry) {
+            const list = getHistory();
+            list.unshift({ ...entry, id: Date.now() });
+            localStorage.setItem(HISTORY_KEY, JSON.stringify(list.slice(0, MAX_HISTORY)));
+            renderHistory();
+        }
+
+        function clearHistory() {
+            if (!getHistory().length) return;
+            if (confirm("¿Borrar todo el historial de predicciones?")) {
+                localStorage.removeItem(HISTORY_KEY);
+                renderHistory();
+            }
+        }
+
+        function formatDate(iso) {
+            const d = new Date(iso);
+            return d.toLocaleString("es", {
+                day: "2-digit", month: "short", year: "numeric",
+                hour: "2-digit", minute: "2-digit"
+            });
+        }
+
+        function renderHistory() {
+            const list = getHistory();
+            const el = document.getElementById("predictionHistory");
+            const countEl = document.getElementById("historyCount");
+            countEl.textContent = list.length === 1 ? "1 predicción" : `${list.length} predicciones`;
+
+            if (!list.length) {
+                el.innerHTML = `
+                    <div class="empty-history">
+                        <div class="big">🏟️</div>
+                        <p>Aún no hay predicciones.</p>
+                        <p style="font-size:0.85rem;margin-top:0.35rem">Usa el predictor arriba y tus resultados aparecerán aquí.</p>
+                    </div>`;
+                return;
+            }
+
+            el.innerHTML = list.map(p => `
+                <article class="history-item">
+                    <div class="history-match">
+                        ${escapeHtml(p.home)} <span class="prob">${p.home_win}%</span>
+                        · ${p.draw}% ·
+                        <span class="prob">${p.away_win}%</span> ${escapeHtml(p.away)}
+                    </div>
+                    <div class="history-meta">
+                        ${STAGE_LABELS[p.stage] || p.stage} · Mundial 2026 · ${formatDate(p.date)}
+                    </div>
+                    <div class="history-result">
+                        <span class="result-pill">${escapeHtml(p.predicted_result)}</span>
+                    </div>
+                </article>
+            `).join("");
+        }
+
+        function escapeHtml(s) {
+            const d = document.createElement("div");
+            d.textContent = s;
+            return d.innerHTML;
+        }
+
+        const KNOCKOUT_STAGES = new Set([
+            "Round of 32", "Round of 16", "Quarter-finals", "Semi-finals", "Final"
+        ]);
+
+        function clampPct(x) {
+            const n = Number(x);
+            if (!Number.isFinite(n)) return 0;
+            return Math.max(0, Math.min(100, n));
+        }
+
+        function pickOutcome(probs, stage) {
+            const h = clampPct(probs.home_win);
+            const d = clampPct(probs.draw);
+            const a = clampPct(probs.away_win);
+            const allowDraw = !KNOCKOUT_STAGES.has(stage);
+            if (allowDraw && d >= h && d >= a) return "draw";
+            if (h >= a) return "home";
+            return "away";
+        }
+
+        function pickRealisticScore(outcome, margin) {
+            const homeWins = [[1,0],[2,0],[2,1],[3,0],[3,1],[3,2],[1,0],[2,1]];
+            const awayWins = [[0,1],[0,2],[1,2],[0,3],[1,3],[2,3],[0,1],[1,2]];
+            const draws = [[0,0],[1,1],[1,1],[2,2]];
+            let pool = draws;
+            if (outcome === "home") pool = margin < 12 ? [[1,0],[2,1],[1,0],[2,1],[2,0]] : homeWins;
+            if (outcome === "away") pool = margin < 12 ? [[0,1],[1,2],[0,1],[1,2],[0,2]] : awayWins;
+            return pool[Math.floor(Math.random() * pool.length)];
+        }
+
+        function estimateScoreClient(data, stage) {
+            const probs = { home_win: data.home_win, draw: data.draw, away_win: data.away_win };
+            const h = clampPct(probs.home_win);
+            const d = clampPct(probs.draw);
+            const a = clampPct(probs.away_win);
+            if (data.predicted_result === "Empate" || (d >= h && d >= a && !KNOCKOUT_STAGES.has(stage))) {
+                const [gh, ga] = pickRealisticScore("draw", 0);
+                return { home: gh, away: ga };
+            }
+            if (data.predicted_score) return data.predicted_score;
+            const outcome = pickOutcome(probs, stage);
+            const [gh, ga] = pickRealisticScore(outcome, Math.abs(h - a));
+            return { home: gh, away: ga };
+        }
+
+        function getScoreDisplay(data, stage) {
+            if (data.score_display) return data.score_display;
+            const s = estimateScoreClient(data, stage);
+            return `${s.home} - ${s.away}`;
+        }
+
+        function shortChartLabel(name, max = 14) {
+            if (!name) return "";
+            if (name === "Empate") return name;
+            return name.length > max ? `${name.slice(0, max - 1)}…` : name;
+        }
+
+        function formatPredictedResult(apiResult, homeTeam, awayTeam) {
+            if (apiResult === "Local") return homeTeam;
+            if (apiResult === "Visitante") return awayTeam;
+            if (apiResult === "Empate") return "Empate";
+            return apiResult;
+        }
+
+        function renderDonutChart(h, d, a, homeTeam, awayTeam) {
+            const total = h + d + a || 1;
+            const pH = (h / total) * 100;
+            const pD = (d / total) * 100;
+            const pA = (a / total) * 100;
+            const dominant = [
+                { key: homeTeam, pct: pH },
+                { key: "Empate", pct: pD },
+                { key: awayTeam, pct: pA },
+            ].sort((x, y) => y.pct - x.pct)[0];
+            const dominantLabel = shortChartLabel(dominant.key, 12);
+            const grad = `conic-gradient(
+                #42a5f5 0% ${pH}%,
+                #9fa8da ${pH}% ${pH + pD}%,
+                #ef5350 ${pH + pD}% 100%
+            )`;
+            return `
+                <div class="donut-wrap" role="img" aria-label="Gráfico circular de probabilidades">
+                    <div class="donut-ring" style="background:${grad}"></div>
+                    <div class="donut-hole">
+                        <div class="pct-main">${dominant.pct.toFixed(0)}%</div>
+                        <div class="pct-label" title="${escapeHtml(dominant.key)}">${escapeHtml(dominantLabel)}</div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderVerticalBarChart(h, d, a, homeTeam, awayTeam) {
+            const max = Math.max(h, d, a, 1);
+            const cols = [
+                { cls: "home", lbl: homeTeam, pct: h },
+                { cls: "draw", lbl: "Empate", pct: d },
+                { cls: "away", lbl: awayTeam, pct: a },
+            ];
+            return `
+                <div class="bar-chart">
+                    ${cols.map(c => `
+                        <div class="bar-col">
+                            <div class="pct">${c.pct.toFixed(1)}%</div>
+                            <div class="pillar-wrap">
+                                <div class="pillar ${c.cls}" style="height:${(c.pct / max) * 100}%"></div>
+                            </div>
+                            <div class="lbl" title="${escapeHtml(c.lbl)}">${escapeHtml(shortChartLabel(c.lbl, 16))}</div>
+                        </div>
+                    `).join("")}
+                </div>
+                <div class="chart-legend">
+                    <span class="lg-home">${escapeHtml(homeTeam)}</span>
+                    <span class="lg-draw">Empate</span>
+                    <span class="lg-away">${escapeHtml(awayTeam)}</span>
+                </div>
+            `;
+        }
+
+        function renderScoreboard(home, away, score) {
+            return `
+                <div class="scoreboard">
+                    <div class="team-name home">${escapeHtml(home)}</div>
+                    <div class="score-digits">
+                        ${score.home}<span class="sep">-</span>${score.away}
+                    </div>
+                    <div class="team-name away">${escapeHtml(away)}</div>
+                </div>
+                <p class="scoreboard-hint">Marcador estimado según el resultado más probable</p>
+            `;
+        }
+
+        function renderMatchChartPanel(home, away, stage, data) {
+            const h = clampPct(data.home_win);
+            const d = clampPct(data.draw);
+            const a = clampPct(data.away_win);
+            const score = estimateScoreClient(data, stage);
+            return `
+                ${renderScoreboard(home, away, score)}
+                <div class="chart-panel match-chart" style="margin-top:1.25rem">
+                    ${renderDonutChart(h, d, a, home, away)}
+                    <div>
+                        ${renderVerticalBarChart(h, d, a, home, away)}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderProbMini({ title, home_win, draw, away_win, homeScore, awayScore }) {
+            const h = clampPct(home_win);
+            const d = clampPct(draw);
+            const a = clampPct(away_win);
+            const max = Math.max(h, d, a, 1);
+            const scoreHtml = (homeScore != null && awayScore != null)
+                ? `<span class="score-tag">${homeScore} - ${awayScore}</span>`
+                : "";
+            return `
+                <div class="prob-mini">
+                    <div class="meta">
+                        <strong>${escapeHtml(title)}</strong>
+                        ${scoreHtml}
+                        <span>${h.toFixed(0)}% · ${d.toFixed(0)}% · ${a.toFixed(0)}%</span>
+                    </div>
+                    <div class="mini-bars" aria-hidden="true">
+                        <div class="mini-bar" style="height:${(h / max) * 100}%;background:linear-gradient(180deg,#42a5f5,#1565c0)"></div>
+                        <div class="mini-bar" style="height:${(d / max) * 100}%;background:linear-gradient(180deg,#9fa8da,#5c6bc0)"></div>
+                        <div class="mini-bar" style="height:${(a / max) * 100}%;background:linear-gradient(180deg,#ef5350,#c62828)"></div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderMatchExplain(home, away, stage, data) {
+            const box = document.getElementById("matchExplain");
+            const meta = document.getElementById("matchExplainMeta");
+            const chart = document.getElementById("matchExplainChart");
+            const method = data.method === "ml_model" ? "Modelo ML" : "Estadísticas BD";
+            const scoreStr = getScoreDisplay(data, stage);
+            meta.textContent = `${method} · ${STAGE_LABELS[stage] || stage} · Marcador: ${scoreStr}`;
+            chart.innerHTML = renderMatchChartPanel(home, away, stage, data);
+            box.style.display = "block";
+
+            const badge = document.getElementById("predictedScoreBadge");
+            if (badge) {
+                badge.textContent = `· ${scoreStr}`;
+                badge.style.display = "inline";
+            }
+        }
+
+        function renderTournamentExplain(data) {
+            const el = document.getElementById("tournamentExplain");
+            const list = document.getElementById("tournamentExplainList");
+            if (!el || !list) return;
+            const ko = Array.isArray(data?.knockout_bracket) ? data.knockout_bracket : [];
+            if (!ko.length) {
+                el.style.display = "none";
+                return;
+            }
+            list.innerHTML = ko.map(m => {
+                const h = m.ko_home_win != null ? m.ko_home_win : m.home_win;
+                const a = m.ko_away_win != null ? m.ko_away_win : m.away_win;
+                return renderProbMini({
+                    title: `${STAGE_LABELS_SIM[m.stage] || m.stage}: ${m.home} vs ${m.away} → ${m.winner}`,
+                    home_win: h,
+                    draw: 0,
+                    away_win: a,
+                    homeScore: m.home_score,
+                    awayScore: m.away_score,
+                });
+            }).join("");
+            el.style.display = "block";
+        }
+
+        async function loadStats() {
+            try {
+                const res = await fetch(`${API}/stats`);
+                const data = await res.json();
+                document.getElementById("totalMatches").textContent = data.totals.total_matches;
+                document.getElementById("totalGoals").textContent = data.totals.total_goals;
+                const avg = (data.totals.total_goals / data.totals.total_matches).toFixed(1);
+                document.getElementById("avgGoals").textContent = avg;
+
+                const medals = ["🥇", "🥈", "🥉", "4", "5"];
+                document.getElementById("topTeams").innerHTML = data.top_teams.map((t, i) => `
+                    <div class="list-row">
+                        <span>${medals[i]} ${escapeHtml(t.team)}</span>
+                        <strong>${t.wins} victorias</strong>
+                    </div>`).join("");
+
+                document.getElementById("seasonGrid").innerHTML = data.by_season.slice(0, 8).map(s => `
+                    <div class="list-row">
+                        <span><strong>Mundial ${s.season}</strong></span>
+                        <span style="color:var(--text-muted);font-size:0.8rem">${s.avg_goals} goles/p · ${s.total_matches} pj</span>
+                    </div>`).join("");
+            } catch {
+                document.getElementById("topTeams").innerHTML = '<div class="loading">No se pudieron cargar estadísticas</div>';
+            }
+        }
+
+        async function loadWorldCup2026Teams() {
+            const res = await fetch(`${API}/worldcup/2026/teams`);
+            const data = await res.json();
+            document.getElementById("wc2026Count").textContent = data.count || 0;
+
+            if (!data.groups || !Object.keys(data.groups).length) {
+                document.getElementById("wc2026Teams").innerHTML =
+                    `<div class="loading">${data.message || "Sin datos de equipos 2026"}</div>`;
+                return [];
+            }
+
+            const groupOrder = Object.keys(data.groups).sort();
+            document.getElementById("wc2026Teams").innerHTML = groupOrder.map(g => `
+                <div class="wc2026-group">
+                    <h3>Grupo ${g}</h3>
+                    ${data.teams.filter(t => t.group === g).map(t => `
+                        <div class="wc2026-team${t.is_host ? " host" : ""}">
+                            <span class="team-line">${teamFlagMarkup(t.team_code)}<span class="team-label">${escapeHtml(t.display_name)}${t.is_host ? " ★" : ""}</span></span>
+                            <span class="code">${escapeHtml(t.team_code)}</span>
+                        </div>`).join("")}
+                </div>`).join("");
+
+            data.teams.forEach(t => {
+                if (t.team_name && t.team_code) teamCodeByName[t.team_name] = t.team_code;
+            });
+            return data.teams.map(t => t.team_name).sort();
+        }
+
+        function fillTeamSelect(selectEl, teams) {
+            while (selectEl.options.length > 1) selectEl.remove(1);
+            teams.forEach(t => {
+                const o = document.createElement("option");
+                o.value = t;
+                o.textContent = t;
+                o.dataset.teamCode = getTeamCode(t);
+                selectEl.appendChild(o);
+            });
+        }
+
+        async function loadTeams() {
+            let sorted = [];
+            try {
+                const res = await fetch(`${API}/worldcup/2026/teams`);
+                const data = await res.json();
+                if (data.teams?.length) {
+                    data.teams.forEach(t => {
+                        if (t.team_name && t.team_code) teamCodeByName[t.team_name] = t.team_code;
+                    });
+                    sorted = data.teams.map(t => t.team_name).sort();
+                }
+            } catch (e) {
+                console.warn("API equipos 2026:", e);
+            }
+
+            if (!sorted.length) {
+                try {
+                    const res = await fetch(`${API}/matches`);
+                    const matches = await res.json();
+                    const teams = new Set();
+                    matches.forEach(m => { teams.add(m.home_team); teams.add(m.away_team); });
+                    sorted = [...teams].sort();
+                } catch (e) {
+                    console.warn("API matches:", e);
+                }
+            }
+
+            if (!sorted.length) sorted = [...FALLBACK_TEAMS];
+
+            const home = document.getElementById("home");
+            const away = document.getElementById("away");
+            fillTeamSelect(home, sorted);
+            fillTeamSelect(away, sorted);
+
+            [home, away, document.getElementById("stage")].forEach(sel => {
+                const wrap = sel.closest(".custom-select");
+                if (wrap?._rebuildOptions) wrap._rebuildOptions();
+                else enhanceSelect(sel);
+            });
+        }
+
+        const STAGE_LABELS_SIM = {
+            "Group Stage": "Grupos",
+            "Round of 32": "Dieciseisavos",
+            "Round of 16": "Octavos",
+            "Quarter-finals": "Cuartos",
+            "Semi-finals": "Semifinal",
+            "Final": "Final"
+        };
+
+        async function simulateTournament() {
+            const btn = document.getElementById("btnSimulate");
+            const box = document.getElementById("simResult");
+            btn.disabled = true;
+            btn.textContent = "SIMULANDO 72 PARTIDOS...";
+            box.style.display = "none";
+
+            try {
+                const res = await fetch(`${API}/worldcup/2026/simulate`, { method: "POST" });
+                const data = await res.json();
+                if (!res.ok || data.error) {
+                    alert(data.error || "No se pudo simular el torneo. ¿API actualizada en Render?");
+                    return;
+                }
+
+                const ko = data.knockout_bracket || [];
+                const finalMatch = ko.find(m => m.stage === "Final") || ko[ko.length - 1];
+                const finalScore = finalMatch
+                    ? `${finalMatch.home_score} - ${finalMatch.away_score}`
+                    : "";
+                const grpLbl = g => g ? ` <span class="grp-tag">(${escapeHtml(g)})</span>` : "";
+                const pathHtml = ko.map(m => `
+                    <div class="path-item">
+                        <span class="stage-tag">${STAGE_LABELS_SIM[m.stage] || m.stage}</span>
+                        <span>${escapeHtml(m.home)}${grpLbl(m.home_group)} ${m.home_score}-${m.away_score} ${escapeHtml(m.away)}${grpLbl(m.away_group)}</span>
+                        <span class="winner">→ ${escapeHtml(m.winner)}</span>
+                    </div>`).join("");
+
+                box.innerHTML = `
+                    <div class="champion-box">
+                        <div class="trophy">🏆</div>
+                        <div class="label">Campeón predicho</div>
+                        <div class="name">${escapeHtml(data.champion)}</div>
+                        ${finalScore ? `<div class="sub" style="font-family:'Bebas Neue',sans-serif;font-size:1.5rem;color:var(--gold);margin-top:0.35rem">Final ${finalScore}</div>` : ""}
+                        <div class="sub">Subcampeón: ${escapeHtml(data.runner_up)}</div>
+                    </div>
+                    <div class="sim-stats">
+                        <div class="sim-stat"><strong>${data.total_matches}</strong> partidos simulados</div>
+                        <div class="sim-stat"><strong>${data.group_stage_matches}</strong> fase de grupos</div>
+                        <div class="sim-stat"><strong>${data.knockout_matches}</strong> eliminatorias</div>
+                    </div>
+                    <h3 class="card-title" style="font-size:1rem;margin-bottom:0.75rem">Ruta del campeón</h3>
+                    <div class="knockout-path">${pathHtml}</div>
+
+                    <div class="explain-box" id="tournamentExplain" style="margin-top:1.25rem">
+                        <div class="explain-head">
+                            <div>
+                                <div class="explain-title">Eliminatorias: probabilidad y marcador</div>
+                                <div class="explain-sub">Barras por resultado · marcador simulado por partido</div>
+                            </div>
+                        </div>
+                        <details class="explain-details" open>
+                            <summary>Ver probabilidades del bracket</summary>
+                            <div class="explain-grid" id="tournamentExplainList"></div>
+                        </details>
+                    </div>
+                `;
+                box.style.display = "block";
+                renderTournamentExplain(data);
+
+                saveToHistory({
+                    home: data.champion,
+                    away: data.runner_up,
+                    stage: "Final",
+                    home_win: 100,
+                    draw: 0,
+                    away_win: 0,
+                    predicted_result: `Campeón: ${data.champion}`,
+                    method: "tournament_sim",
+                    date: new Date().toISOString()
+                });
+            } catch (e) {
+                alert("Error de conexión al simular. Verifica la API en Render.");
+                console.error(e);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = "🏆 SIMULAR MUNDIAL COMPLETO 2026";
+            }
+        }
+
+        async function predict() {
+            const home = document.getElementById("home").value;
+            const away = document.getElementById("away").value;
+            const stage = document.getElementById("stage").value;
+            if (!home || !away) return alert("Selecciona ambos equipos");
+            if (home === away) return alert("Selecciona equipos diferentes");
+
+            const btn = document.querySelector(".btn-predict");
+            btn.textContent = "ANALIZANDO...";
+            btn.disabled = true;
+
+            try {
+                const res = await fetch(`${API}/predict`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ home_team: home, away_team: away, stage, season: 2026 })
+                });
+                const data = await res.json();
+
+                if (!res.ok || data.error) {
+                    alert(data.error || "No se pudo completar la predicción");
+                    return;
+                }
+                if (data.home_win == null) {
+                    alert("Respuesta inválida del servidor. Despliega la API actualizada en Render.");
+                    return;
+                }
+
+                document.getElementById("homeName").innerHTML = renderTeamLine(home, getTeamCode(home));
+                document.getElementById("awayName").innerHTML = renderTeamLine(away, getTeamCode(away));
+                document.getElementById("barLabelHome").textContent = home;
+                document.getElementById("barLabelAway").textContent = away;
+                document.getElementById("barHome").style.width = data.home_win + "%";
+                document.getElementById("barHome").textContent = data.home_win + "%";
+                document.getElementById("barDraw").style.width = data.draw + "%";
+                document.getElementById("barDraw").textContent = data.draw + "%";
+                document.getElementById("barAway").style.width = data.away_win + "%";
+                document.getElementById("barAway").textContent = data.away_win + "%";
+
+                const label = formatPredictedResult(data.predicted_result, home, away);
+                const scoreStr = getScoreDisplay(data, stage);
+                document.getElementById("predicted").textContent = `${label} (${scoreStr})`;
+                document.getElementById("result").style.display = "block";
+                renderMatchExplain(home, away, stage, data);
+
+                saveToHistory({
+                    home,
+                    away,
+                    stage,
+                    home_win: data.home_win,
+                    draw: data.draw,
+                    away_win: data.away_win,
+                    predicted_result: `${label} · ${scoreStr}`,
+                    method: data.method || "ml_model",
+                    date: new Date().toISOString()
+                });
+            } finally {
+                btn.textContent = "PREDECIR";
+                btn.disabled = false;
+            }
+        }
+
+        renderHistory();
+        loadStats();
+        loadWorldCup2026Teams();
+        loadTeams();
+    </script>
+</body>
+</html>
