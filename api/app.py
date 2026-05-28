@@ -1,14 +1,26 @@
 import os
+import sys
 import pickle
+import traceback
+
 import numpy as np
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 
-sys_path = os.path.join(os.path.dirname(__file__), "..", "data")
-if sys_path not in __import__("sys").path:
-    __import__("sys").path.insert(0, os.path.abspath(sys_path))
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+if DATA_DIR not in sys.path:
+    sys.path.insert(0, DATA_DIR)
+
+load_dotenv()
+
+FIFA_DISPLAY_NAMES = {}
+apply_champion_boost = attach_predicted_score = encode_stage = None
+get_team_stats_combined = predict_from_stats = resolve_model_team = None
+simulate_worldcup_2026 = None
+SIM_IMPORT_ERROR = None
 
 try:
     from worldcup_2026 import FIFA_DISPLAY_NAMES
@@ -20,20 +32,22 @@ try:
         predict_from_stats,
         resolve_model_team,
     )
-    from tournament_sim import simulate_worldcup_2026
-except ImportError:
-    FIFA_DISPLAY_NAMES = {}
-    get_team_stats_combined = predict_from_stats = resolve_model_team = None
-    simulate_worldcup_2026 = None
+except Exception as exc:
+    print(f"[worldpredict] Error cargando prediction_utils: {exc}", flush=True)
+    traceback.print_exc()
 
-load_dotenv()
+try:
+    from tournament_sim import simulate_worldcup_2026
+except Exception as exc:
+    SIM_IMPORT_ERROR = str(exc)
+    print(f"[worldpredict] Error cargando tournament_sim: {exc}", flush=True)
+    traceback.print_exc()
+    simulate_worldcup_2026 = None
 
 app = Flask(__name__)
 CORS(app)
 
 engine = create_engine(os.getenv("DATABASE_URL"))
-
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 with open(os.path.join(BASE_DIR, "models/model.pkl"), "rb") as f:
     model = pickle.load(f)
@@ -44,7 +58,12 @@ LABEL_CLASSES = set(le.classes_)
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "message": "WorldPredict API corriendo!"})
+    return jsonify({
+        "status": "ok",
+        "message": "WorldPredict API corriendo!",
+        "simulation_available": simulate_worldcup_2026 is not None,
+        "simulation_error": SIM_IMPORT_ERROR,
+    })
 
 @app.route("/matches")
 def get_matches():
@@ -69,6 +88,8 @@ def predict():
         return jsonify({"error": "home_team y away_team son obligatorios"}), 400
     if home == away:
         return jsonify({"error": "Selecciona equipos diferentes"}), 400
+    if get_team_stats_combined is None:
+        return jsonify({"error": "Motor de predicción no disponible en el servidor"}), 500
 
     with engine.connect() as conn:
         hs = get_team_stats_combined(conn, home, season)
@@ -182,10 +203,20 @@ def worldcup_2026_teams():
 @app.route("/worldcup/2026/simulate", methods=["POST"])
 def simulate_worldcup():
     if simulate_worldcup_2026 is None:
-        return jsonify({"error": "Módulo de simulación no disponible"}), 500
-    with engine.connect() as conn:
-        result = simulate_worldcup_2026(conn, model, le, LABEL_CLASSES)
-    return jsonify(result)
+        msg = "Módulo de simulación no disponible"
+        if SIM_IMPORT_ERROR:
+            msg = f"{msg}: {SIM_IMPORT_ERROR}"
+        return jsonify({"error": msg}), 500
+    if get_team_stats_combined is None:
+        return jsonify({"error": "Motor de predicción no disponible"}), 500
+    try:
+        with engine.connect() as conn:
+            result = simulate_worldcup_2026(conn, model, le, LABEL_CLASSES)
+        return jsonify(result)
+    except Exception as exc:
+        print(f"[worldpredict] simulate error: {exc}", flush=True)
+        traceback.print_exc()
+        return jsonify({"error": f"Error en simulación: {exc}"}), 500
 
 
 @app.route("/stats")
