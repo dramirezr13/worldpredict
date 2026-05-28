@@ -13,6 +13,7 @@ if sys_path not in __import__("sys").path:
 try:
     from worldcup_2026 import FIFA_DISPLAY_NAMES
     from prediction_utils import (
+        apply_champion_boost,
         attach_predicted_score,
         get_team_stats_combined,
         predict_from_stats,
@@ -81,7 +82,7 @@ def predict():
         away_model = resolve_model_team(away, LABEL_CLASSES)
 
         if not home_model or not away_model:
-            result = predict_from_stats(hs, as_)
+            result = apply_champion_boost(home, away, predict_from_stats(hs, as_))
             result.update({
                 "home_team": home,
                 "away_team": away,
@@ -103,16 +104,19 @@ def predict():
         ]])
         probs = model.predict_proba(features)[0]
 
-    return jsonify(attach_predicted_score({
-        "home_team": home,
-        "away_team": away,
+    ml_probs = apply_champion_boost(home, away, {
         "home_win": round(float(probs[0]) * 100, 1),
         "draw": round(float(probs[1]) * 100, 1),
         "away_win": round(float(probs[2]) * 100, 1),
         "predicted_result": ["Local", "Empate", "Visitante"][int(np.argmax(probs))],
         "method": "ml_model",
+    })
+    return jsonify(attach_predicted_score({
+        "home_team": home,
+        "away_team": away,
         "home_stats": _public_stats(hs),
         "away_stats": _public_stats(as_),
+        **ml_probs,
     }, stage))
 
 
