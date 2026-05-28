@@ -1,5 +1,7 @@
 """Simulación completa del Mundial 2026 usando el motor de predicción."""
 
+from __future__ import annotations
+
 import random
 from itertools import combinations
 
