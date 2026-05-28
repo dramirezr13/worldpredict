@@ -5,9 +5,12 @@ from itertools import combinations
 import numpy as np
 
 from prediction_utils import (
+    apply_champion_boost,
     get_team_stats_combined,
+    pick_outcome_from_probs,
     predict_from_stats,
     resolve_model_team,
+    simulate_match_score,
 )
 from worldcup_2026 import WORLD_CUP_2026, WORLD_CUP_2026_TEAMS
 
@@ -46,33 +49,18 @@ def _predict_probs(conn, model, le, label_classes, home, away, stage, season=202
             hs["draws"], as_["draws"],
         ]])
         probs = model.predict_proba(features)[0]
-        return {
+        raw = {
             "home_win": float(probs[0]) * 100,
             "draw": float(probs[1]) * 100,
             "away_win": float(probs[2]) * 100,
             "method": "ml_model",
+            "predicted_result": ["Local", "Empate", "Visitante"][int(np.argmax(probs))],
         }
+        return apply_champion_boost(home, away, raw)
 
     p = predict_from_stats(hs, as_)
     p["method"] = "database_stats"
-    return p
-
-
-def _scores_from_outcome(outcome, probs):
-    if outcome == "home":
-        return 2, 0 if probs["home_win"] > 55 else 1
-    if outcome == "away":
-        return 0 if probs["away_win"] > 55 else 1, 2
-    return 1, 1
-
-
-def _pick_outcome(probs, allow_draw=True):
-    h, d, a = probs["home_win"], probs["draw"], probs["away_win"]
-    if allow_draw and d >= h and d >= a:
-        return "draw"
-    if h >= a:
-        return "home"
-    return "away"
+    return apply_champion_boost(home, away, p)
 
 
 def _knockout_winner(probs, home, away):
@@ -138,11 +126,13 @@ def simulate_worldcup_2026(conn, model=None, le=None, label_classes=None):
     for grp, teams in sorted(groups.items()):
         standings = {t: _new_standing(t) for t in teams}
         for home, away in combinations(teams, 2):
+            hs_stats = get_team_stats_combined(conn, home)
+            as_stats = get_team_stats_combined(conn, away)
             probs = _predict_probs(
                 conn, model, le, label_classes, home, away, "Group Stage"
             )
-            outcome = _pick_outcome(probs, allow_draw=True)
-            hs, as_ = _scores_from_outcome(outcome, probs)
+            outcome = pick_outcome_from_probs(probs, "Group Stage")
+            hs, as_ = simulate_match_score(outcome, probs, hs_stats, as_stats)
             _apply_result(standings, home, away, hs, as_)
             all_matches.append({
                 "stage": "Group Stage",
@@ -202,11 +192,14 @@ def simulate_worldcup_2026(conn, model=None, le=None, label_classes=None):
         next_round = []
         for i in range(0, len(current), 2):
             home, away = current[i], current[i + 1]
+            hs_stats = get_team_stats_combined(conn, home)
+            as_stats = get_team_stats_combined(conn, away)
             probs = _predict_probs(
                 conn, model, le, label_classes, home, away, stage_name
             )
             winner = _knockout_winner(probs, home, away)
-            hs, as_ = (2, 1) if winner == home else (1, 2)
+            outcome = "home" if winner == home else "away"
+            hs, as_ = simulate_match_score(outcome, probs, hs_stats, as_stats)
             knockout_matches.append({
                 "stage": stage_name,
                 "home": home,
