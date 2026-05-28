@@ -1,27 +1,21 @@
 """Simulación completa del Mundial 2026 usando el motor de predicción."""
 
+import random
 from itertools import combinations
 
 import numpy as np
 
 from prediction_utils import (
     apply_champion_boost,
+    encode_stage,
     get_team_stats_combined,
-    pick_outcome_from_probs,
+    knockout_win_weights,
     predict_from_stats,
     resolve_model_team,
-    simulate_match_score,
+    simulate_group_match,
+    simulate_knockout_match,
 )
 from worldcup_2026 import WORLD_CUP_2026, WORLD_CUP_2026_TEAMS
-
-STAGE_ENC = {
-    "Group Stage": 1,
-    "Round of 32": 2,
-    "Round of 16": 3,
-    "Quarter-finals": 4,
-    "Semi-finals": 5,
-    "Final": 6,
-}
 
 
 def _groups_from_teams():
@@ -38,7 +32,7 @@ def _predict_probs(conn, model, le, label_classes, home, away, stage, season=202
     away_model = resolve_model_team(away, label_classes)
 
     if model is not None and le is not None and home_model and away_model:
-        stage_enc = STAGE_ENC.get(stage, 1)
+        stage_enc = encode_stage(stage)
         home_enc = le.transform([home_model])[0]
         away_enc = le.transform([away_model])[0]
         features = np.array([[
@@ -63,11 +57,8 @@ def _predict_probs(conn, model, le, label_classes, home, away, stage, season=202
     return apply_champion_boost(home, away, p)
 
 
-def _knockout_winner(probs, home, away):
-    h, a = probs["home_win"], probs["away_win"]
-    if h >= a:
-        return home
-    return away
+def _match_rng(home: str, away: str, stage: str) -> random.Random:
+    return random.Random(f"{home}|{away}|{stage}|{random.random()}")
 
 
 def _new_standing(team):
@@ -131,8 +122,10 @@ def simulate_worldcup_2026(conn, model=None, le=None, label_classes=None):
             probs = _predict_probs(
                 conn, model, le, label_classes, home, away, "Group Stage"
             )
-            outcome = pick_outcome_from_probs(probs, "Group Stage")
-            hs, as_ = simulate_match_score(outcome, probs, hs_stats, as_stats)
+            rng = _match_rng(home, away, f"Group Stage|{grp}")
+            hs, as_ = simulate_group_match(
+                probs, hs_stats, as_stats, "Group Stage", rng
+            )
             _apply_result(standings, home, away, hs, as_)
             all_matches.append({
                 "stage": "Group Stage",
@@ -144,6 +137,7 @@ def simulate_worldcup_2026(conn, model=None, le=None, label_classes=None):
                 "home_win": probs["home_win"],
                 "draw": probs["draw"],
                 "away_win": probs["away_win"],
+                "method": probs.get("method", "ml_model"),
             })
 
         ranked = _rank_standings(standings)
@@ -197,9 +191,11 @@ def simulate_worldcup_2026(conn, model=None, le=None, label_classes=None):
             probs = _predict_probs(
                 conn, model, le, label_classes, home, away, stage_name
             )
-            winner = _knockout_winner(probs, home, away)
-            outcome = "home" if winner == home else "away"
-            hs, as_ = simulate_match_score(outcome, probs, hs_stats, as_stats)
+            rng = _match_rng(home, away, stage_name)
+            hs, as_, winner = simulate_knockout_match(
+                home, away, probs, hs_stats, as_stats, rng
+            )
+            h_eff, a_eff = knockout_win_weights(probs)
             knockout_matches.append({
                 "stage": stage_name,
                 "home": home,
@@ -210,6 +206,9 @@ def simulate_worldcup_2026(conn, model=None, le=None, label_classes=None):
                 "home_win": probs["home_win"],
                 "draw": probs["draw"],
                 "away_win": probs["away_win"],
+                "ko_home_win": round(h_eff, 1),
+                "ko_away_win": round(a_eff, 1),
+                "method": probs.get("method", "ml_model"),
             })
             next_round.append(winner)
         current = next_round
