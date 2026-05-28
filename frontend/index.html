@@ -1532,23 +1532,29 @@
             return "away";
         }
 
+        function pickRealisticScore(outcome, margin) {
+            const homeWins = [[1,0],[2,0],[2,1],[3,0],[3,1],[3,2],[1,0],[2,1]];
+            const awayWins = [[0,1],[0,2],[1,2],[0,3],[1,3],[2,3],[0,1],[1,2]];
+            const draws = [[0,0],[1,1],[1,1],[2,2]];
+            let pool = draws;
+            if (outcome === "home") pool = margin < 12 ? [[1,0],[2,1],[1,0],[2,1],[2,0]] : homeWins;
+            if (outcome === "away") pool = margin < 12 ? [[0,1],[1,2],[0,1],[1,2],[0,2]] : awayWins;
+            return pool[Math.floor(Math.random() * pool.length)];
+        }
+
         function estimateScoreClient(data, stage) {
             const probs = { home_win: data.home_win, draw: data.draw, away_win: data.away_win };
             const h = clampPct(probs.home_win);
             const d = clampPct(probs.draw);
             const a = clampPct(probs.away_win);
-            if (data.predicted_result === "Empate" || (d >= h && d >= a)) {
-                return { home: 1, away: 1 };
+            if (data.predicted_result === "Empate" || (d >= h && d >= a && !KNOCKOUT_STAGES.has(stage))) {
+                const [gh, ga] = pickRealisticScore("draw", 0);
+                return { home: gh, away: ga };
             }
             if (data.predicted_score) return data.predicted_score;
             const outcome = pickOutcome(probs, stage);
-            if (outcome === "home") {
-                return probs.home_win > 55 ? { home: 2, away: 0 } : { home: 2, away: 1 };
-            }
-            if (outcome === "away") {
-                return probs.away_win > 55 ? { home: 0, away: 2 } : { home: 1, away: 2 };
-            }
-            return { home: 1, away: 1 };
+            const [gh, ga] = pickRealisticScore(outcome, Math.abs(h - a));
+            return { home: gh, away: ga };
         }
 
         function getScoreDisplay(data, stage) {
@@ -1703,14 +1709,18 @@
                 el.style.display = "none";
                 return;
             }
-            list.innerHTML = ko.map(m => renderProbMini({
-                title: `${STAGE_LABELS_SIM[m.stage] || m.stage}: ${m.home} vs ${m.away} → ${m.winner}`,
-                home_win: m.home_win,
-                draw: m.draw,
-                away_win: m.away_win,
-                homeScore: m.home_score,
-                awayScore: m.away_score,
-            })).join("");
+            list.innerHTML = ko.map(m => {
+                const h = m.ko_home_win != null ? m.ko_home_win : m.home_win;
+                const a = m.ko_away_win != null ? m.ko_away_win : m.away_win;
+                return renderProbMini({
+                    title: `${STAGE_LABELS_SIM[m.stage] || m.stage}: ${m.home} vs ${m.away} → ${m.winner}`,
+                    home_win: h,
+                    draw: 0,
+                    away_win: a,
+                    homeScore: m.home_score,
+                    awayScore: m.away_score,
+                });
+            }).join("");
             el.style.display = "block";
         }
 
@@ -1872,7 +1882,7 @@
                     <h3 class="card-title" style="font-size:1rem;margin-bottom:0.75rem">Ruta del campeón</h3>
                     <div class="knockout-path">${pathHtml}</div>
 
-                    <div class="explain-box" id="tournamentExplain" style="display:none;margin-top:1.25rem">
+                    <div class="explain-box" id="tournamentExplain" style="margin-top:1.25rem">
                         <div class="explain-head">
                             <div>
                                 <div class="explain-title">Eliminatorias: probabilidad y marcador</div>
