@@ -63,6 +63,18 @@ WORLD_CUP_2026_TEAMS = [
     ("Panama", "PAN", "L", "CONCACAF", False),
 ]
 
+# Selecciones campeonas del Mundial masculino FIFA (títulos históricos)
+WORLD_CUP_CHAMPIONS = frozenset({
+    "Argentina",
+    "Brazil",
+    "Germany",
+    "Italy",
+    "Uruguay",
+    "France",
+    "England",
+    "Spain",
+})
+
 # Etiquetas FIFA oficiales para mostrar en la UI
 FIFA_DISPLAY_NAMES = {
     "South Korea": "Korea Republic",
