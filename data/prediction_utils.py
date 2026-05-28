@@ -1,6 +1,14 @@
 """Utilidades de predicción: alias de equipos, estadísticas desde BD y fallback."""
 
+import hashlib
+import random
+
 from sqlalchemy import text
+
+from worldcup_2026 import WORLD_CUP_CHAMPIONS
+
+# +10% relativo a la probabilidad de victoria de un campeón del mundo
+CHAMPION_WIN_BOOST = 1.10
 
 # Nombre en worldcup_2026 / UI -> nombre en label_encoder.pkl
 MODEL_TEAM_ALIASES = {
@@ -169,6 +177,47 @@ def _fixed_probs(home_pct: float, draw_pct: float, away_pct: float, result: str)
     }
 
 
+def is_world_champion(team: str) -> bool:
+    """True si la selección ha ganado al menos un Mundial masculino FIFA."""
+    if not team:
+        return False
+    if team in WORLD_CUP_CHAMPIONS:
+        return True
+    alias = MODEL_TEAM_ALIASES.get(team)
+    return bool(alias and alias in WORLD_CUP_CHAMPIONS)
+
+
+def apply_champion_boost(home_team: str, away_team: str, probs: dict) -> dict:
+    """Aumenta +10% la prob. de victoria de cada campeón del mundo y renormaliza."""
+    if not is_world_champion(home_team) and not is_world_champion(away_team):
+        return probs
+
+    h = float(probs["home_win"])
+    d = float(probs["draw"])
+    a = float(probs["away_win"])
+    if is_world_champion(home_team):
+        h *= CHAMPION_WIN_BOOST
+    if is_world_champion(away_team):
+        a *= CHAMPION_WIN_BOOST
+
+    total = h + d + a
+    if total <= 0:
+        return probs
+
+    h, d, a = (h / total) * 100, (d / total) * 100, (a / total) * 100
+    labels = ["Local", "Empate", "Visitante"]
+    values = [h, d, a]
+    result = {
+        **probs,
+        "home_win": round(h, 1),
+        "draw": round(d, 1),
+        "away_win": round(a, 1),
+    }
+    if "predicted_result" in probs:
+        result["predicted_result"] = labels[max(range(3), key=lambda i: values[i])]
+    return result
+
+
 KNOCKOUT_STAGES = frozenset({
     "Round of 32", "Round of 16", "Quarter-finals", "Semi-finals", "Final",
 })
@@ -185,23 +234,136 @@ def pick_outcome_from_probs(probs: dict, stage: str = "Group Stage") -> str:
     return "away"
 
 
+def _match_seed(home: str, away: str, stage: str) -> int:
+    key = f"{home}|{away}|{stage}".encode("utf-8")
+    return int(hashlib.md5(key).hexdigest()[:8], 16)
+
+
+def _goal_rates(stats: dict | None) -> tuple[float, float]:
+    """Goles a favor/en contra por partido (estimados si faltan datos)."""
+    if not stats:
+        return 1.25, 1.25
+    mp = max(int(stats.get("matches_played") or 0), 1)
+    if stats.get("goals_for") is not None and stats.get("goals_against") is not None:
+        return (
+            max(0.4, float(stats["goals_for"]) / mp),
+            max(0.4, float(stats["goals_against"]) / mp),
+        )
+    gd = float(stats.get("goal_diff") or 0) / mp
+    wr = float(stats.get("win_rate") or 0.33)
+    if wr > 1:
+        wr /= 100.0
+    gf = 1.05 + gd * 0.35 + wr * 0.55
+    ga = max(0.55, 1.05 - gd * 0.3 + (1.0 - wr) * 0.2)
+    return max(0.4, gf), max(0.4, ga)
+
+
+def simulate_match_score(
+    outcome: str,
+    probs: dict,
+    home_stats: dict | None = None,
+    away_stats: dict | None = None,
+    *,
+    rng: random.Random | None = None,
+) -> tuple[int, int]:
+    """Marcador aleatorio pero realista, coherente con el resultado del partido."""
+    rng = rng or random.Random()
+    h_p = float(probs.get("home_win", 33))
+    a_p = float(probs.get("away_win", 33))
+    margin = abs(h_p - a_p)
+
+    h_gf, h_ga = _goal_rates(home_stats)
+    a_gf, a_ga = _goal_rates(away_stats)
+    attack_home = h_gf + a_ga * 0.45 + 0.12
+    attack_away = a_gf + h_ga * 0.45
+
+    if outcome == "draw":
+        lines = [(0, 0), (1, 1), (2, 2), (3, 3)]
+        weights = [16.0, 52.0, 24.0, 8.0]
+        if attack_home + attack_away > 2.8:
+            weights[2] += 6
+            weights[3] += 2
+        return rng.choices(lines, weights=weights, k=1)[0]
+
+    if outcome == "home":
+        lines = [
+            (1, 0), (2, 0), (2, 1), (3, 0), (3, 1), (3, 2), (4, 1), (4, 2), (5, 1),
+        ]
+        weights = [26.0, 14.0, 22.0, 9.0, 10.0, 6.0, 4.0, 2.0, 1.0]
+        if margin < 12:
+            weights[0] += 12
+            weights[2] += 4
+        elif margin > 28:
+            weights[1] += 8
+            weights[3] += 5
+            weights[4] += 4
+        if attack_home > attack_away + 0.35:
+            weights[1] += 5
+            weights[3] += 3
+        return rng.choices(lines, weights=weights, k=1)[0]
+
+    lines = [
+        (0, 1), (0, 2), (1, 2), (0, 3), (1, 3), (2, 3), (1, 4), (2, 4), (1, 5),
+    ]
+    weights = [26.0, 14.0, 22.0, 9.0, 10.0, 6.0, 4.0, 2.0, 1.0]
+    if margin < 12:
+        weights[0] += 12
+        weights[2] += 4
+    elif margin > 28:
+        weights[1] += 8
+        weights[3] += 5
+        weights[4] += 4
+    if attack_away > attack_home + 0.35:
+        weights[1] += 5
+        weights[3] += 3
+    return rng.choices(lines, weights=weights, k=1)[0]
+
+
+def _outcome_from_predicted(predicted_result: str | None, probs: dict, stage: str) -> str:
+    if predicted_result == "Empate":
+        return "draw"
+    if predicted_result == "Local":
+        return "home"
+    if predicted_result == "Visitante":
+        return "away"
+    h, d, a = probs["home_win"], probs["draw"], probs["away_win"]
+    if d >= h and d >= a and stage not in KNOCKOUT_STAGES:
+        return "draw"
+    return pick_outcome_from_probs(probs, stage)
+
+
 def estimate_score_from_probs(
-    probs: dict, stage: str = "Group Stage", predicted_result: str | None = None
+    probs: dict,
+    stage: str = "Group Stage",
+    predicted_result: str | None = None,
+    home_stats: dict | None = None,
+    away_stats: dict | None = None,
+    home_team: str = "",
+    away_team: str = "",
 ) -> tuple[int, int]:
     """Marcador estimado coherente con probabilidades, fase y resultado predicho."""
-    h, d, a = probs["home_win"], probs["draw"], probs["away_win"]
-    if predicted_result == "Empate" or (d >= h and d >= a):
-        return (1, 1)
-    outcome = pick_outcome_from_probs(probs, stage)
-    if outcome == "home":
-        return (2, 0) if h > 55 else (2, 1)
-    if outcome == "away":
-        return (0, 2) if a > 55 else (1, 2)
-    return (1, 1)
+    outcome = _outcome_from_predicted(predicted_result, probs, stage)
+    seed = _match_seed(home_team, away_team, stage)
+    return simulate_match_score(
+        outcome, probs, home_stats, away_stats, rng=random.Random(seed)
+    )
 
 
 def attach_predicted_score(result: dict, stage: str = "Group Stage") -> dict:
-    hs, as_ = estimate_score_from_probs(result, stage, result.get("predicted_result"))
+    probs = {
+        "home_win": result["home_win"],
+        "draw": result["draw"],
+        "away_win": result["away_win"],
+    }
+    hs, as_ = estimate_score_from_probs(
+        probs,
+        stage,
+        result.get("predicted_result"),
+        result.get("home_stats"),
+        result.get("away_stats"),
+        result.get("home_team", ""),
+        result.get("away_team", ""),
+    )
     result["predicted_score"] = {"home": hs, "away": as_}
     result["score_display"] = f"{hs} - {as_}"
     return result
