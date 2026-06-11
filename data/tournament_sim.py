@@ -18,12 +18,6 @@ from prediction_utils import (
     simulate_knockout_match,
 )
 from worldcup_2026 import WORLD_CUP_2026, WORLD_CUP_2026_TEAMS
-from worldcup_2026_bracket import (
-    build_group_qualifiers,
-    build_knockout_round_fixtures,
-    resolve_r32_pairing,
-    validate_r32_pairings,
-)
 
 
 def _groups_from_teams():
@@ -161,44 +155,53 @@ def simulate_worldcup_2026(conn, model=None, le=None, label_classes=None):
     third_places.sort(key=lambda x: (-x["points"], -x["gd"], -x["gf"]))
     best_thirds = [t["team"] for t in third_places[:8]]
 
-    qual = build_group_qualifiers(group_results, best_thirds)
-    team_group = qual["team_group"]
-    r32_pairings = resolve_r32_pairing(qual)
-    validate_r32_pairings(r32_pairings, team_group)
+    knockout_teams = []
+    for gr in group_results:
+        knockout_teams.extend(gr["qualified"])
+    knockout_teams.extend(best_thirds)
+
+    seed_rows = []
+    for gr in group_results:
+        for row in gr["standings"]:
+            if row["team"] in knockout_teams:
+                seed_rows.append(row)
+    seed_rows.sort(key=lambda x: (-x["points"], -x["gd"], -x["gf"]))
+    ordered = [r["team"] for r in seed_rows]
+
+    if len(ordered) < 32:
+        for t in knockout_teams:
+            if t not in ordered:
+                ordered.append(t)
+    ordered = ordered[:32]
 
     rounds = [
-        ("Round of 32", r32_pairings),
-        ("Round of 16", None),
-        ("Quarter-finals", None),
-        ("Semi-finals", None),
-        ("Final", None),
+        ("Round of 32", 16),
+        ("Round of 16", 8),
+        ("Quarter-finals", 4),
+        ("Semi-finals", 2),
+        ("Final", 1),
     ]
     knockout_matches = []
-    match_winners: dict[int, str] = {}
+    current = ordered
 
-    for stage_name, fixtures in rounds:
-        if fixtures is None:
-            fixtures = build_knockout_round_fixtures(stage_name, match_winners)
-
-        for home, away, match_id in fixtures:
+    for stage_name, _n_matches in rounds:
+        next_round = []
+        for i in range(0, len(current), 2):
+            home, away = current[i], current[i + 1]
             hs_stats = get_team_stats_combined(conn, home)
             as_stats = get_team_stats_combined(conn, away)
             probs = _predict_probs(
                 conn, model, le, label_classes, home, away, stage_name
             )
-            rng = _match_rng(home, away, f"{stage_name}|{match_id}")
+            rng = _match_rng(home, away, stage_name)
             hs, as_, winner = simulate_knockout_match(
                 home, away, probs, hs_stats, as_stats, rng
             )
             h_eff, a_eff = knockout_win_weights(probs)
-            match_winners[match_id] = winner
             knockout_matches.append({
                 "stage": stage_name,
-                "match_id": match_id,
                 "home": home,
                 "away": away,
-                "home_group": team_group.get(home),
-                "away_group": team_group.get(away),
                 "home_score": hs,
                 "away_score": as_,
                 "winner": winner,
@@ -209,9 +212,11 @@ def simulate_worldcup_2026(conn, model=None, le=None, label_classes=None):
                 "ko_away_win": round(a_eff, 1),
                 "method": probs.get("method", "ml_model"),
             })
+            next_round.append(winner)
+        current = next_round
 
+    champion = current[0]
     final = knockout_matches[-1]
-    champion = final["winner"]
     runner_up = final["home"] if final["winner"] == final["away"] else final["away"]
 
     return {
