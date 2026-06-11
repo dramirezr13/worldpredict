@@ -1253,6 +1253,60 @@
             "Third place": "Tercer puesto"
         };
 
+        async function wakeApi(maxAttempts = 4) {
+            let lastError = null;
+            for (let i = 0; i < maxAttempts; i++) {
+                try {
+                    const res = await fetch(`${API}/health`);
+                    if (!res.ok) throw new Error(`API respondió con estado ${res.status}`);
+                    const data = await res.json();
+                    if (data.database_connected === false) {
+                        throw new Error(
+                            data.database_error
+                            || "La API no tiene conexión a la base de datos. Configura DATABASE_URL en Render."
+                        );
+                    }
+                    return data;
+                } catch (e) {
+                    lastError = e;
+                    if (i < maxAttempts - 1) {
+                        await new Promise(r => setTimeout(r, 5000 * (i + 1)));
+                    }
+                }
+            }
+            throw lastError || new Error("No se pudo conectar con la API en Render.");
+        }
+
+        async function apiFetch(path, options = {}, timeoutMs = 120000) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            try {
+                const res = await fetch(`${API}${path}`, { ...options, signal: controller.signal });
+                const text = await res.text();
+                let data;
+                try {
+                    data = text ? JSON.parse(text) : {};
+                } catch {
+                    throw new Error(
+                        res.ok
+                            ? "Respuesta inválida del servidor."
+                            : `Error del servidor (${res.status}). Despliega la API actualizada en Render.`
+                    );
+                }
+                if (!res.ok) {
+                    throw new Error(data.error || `Error del servidor (${res.status})`);
+                }
+                return data;
+            } catch (e) {
+                if (e.name === "AbortError") {
+                    throw new Error("La solicitud tardó demasiado. En el plan gratuito de Render el servidor puede tardar ~50 s en despertar; intenta de nuevo.");
+                }
+                throw e;
+            } finally {
+                clearTimeout(timer);
+            }
+        }
+
         function normalizeSearch(s) {
             return s.trim().toLowerCase()
                 .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -1848,12 +1902,10 @@
             box.style.display = "none";
 
             try {
-                const res = await fetch(`${API}/worldcup/2026/simulate`, { method: "POST" });
-                const data = await res.json();
-                if (!res.ok || data.error) {
-                    alert(data.error || "No se pudo simular el torneo. ¿API actualizada en Render?");
-                    return;
-                }
+                btn.textContent = "DESPERTANDO API...";
+                await wakeApi();
+                btn.textContent = "SIMULANDO 72 PARTIDOS...";
+                const data = await apiFetch("/worldcup/2026/simulate", { method: "POST" }, 180000);
 
                 const ko = data.knockout_bracket || [];
                 const finalMatch = ko.find(m => m.stage === "Final") || ko[ko.length - 1];
@@ -1912,7 +1964,7 @@
                     date: new Date().toISOString()
                 });
             } catch (e) {
-                alert("Error de conexión al simular. Verifica la API en Render.");
+                alert(e.message || "Error de conexión al simular. Verifica la API en Render.");
                 console.error(e);
             } finally {
                 btn.disabled = false;
@@ -1932,17 +1984,13 @@
             btn.disabled = true;
 
             try {
-                const res = await fetch(`${API}/predict`, {
+                await wakeApi();
+                const data = await apiFetch("/predict", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ home_team: home, away_team: away, stage, season: 2026 })
                 });
-                const data = await res.json();
 
-                if (!res.ok || data.error) {
-                    alert(data.error || "No se pudo completar la predicción");
-                    return;
-                }
                 if (data.home_win == null) {
                     alert("Respuesta inválida del servidor. Despliega la API actualizada en Render.");
                     return;
@@ -1976,6 +2024,9 @@
                     method: data.method || "ml_model",
                     date: new Date().toISOString()
                 });
+            } catch (e) {
+                alert(e.message || "No se pudo completar la predicción. Verifica la API en Render.");
+                console.error(e);
             } finally {
                 btn.textContent = "PREDECIR";
                 btn.disabled = false;
